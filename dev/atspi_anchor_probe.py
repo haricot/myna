@@ -85,10 +85,9 @@ def inserted_exactly(previous: str, after: str, offset: int, payload: str) -> bo
 
 
 def _protected(pyatspi, obj) -> bool:
-    state = obj.getState()
-    return state.contains(pyatspi.STATE_PROTECTED) or (
-        obj.getRole() == pyatspi.ROLE_PASSWORD_TEXT
-    )
+    # AT-SPI provides a password-text *role*, not STATE_PROTECTED. The latter
+    # was an invalid assumption and crashed on the real Arch pyatspi binding.
+    return obj.getRole() == pyatspi.ROLE_PASSWORD_TEXT
 
 
 def _is_focused(pyatspi, obj) -> bool:
@@ -100,13 +99,16 @@ def _editable_ancestor(pyatspi, obj):
     while obj is not None:
         if _protected(pyatspi, obj):
             raise ProbeError("focused field is protected")
+        if not obj.getState().contains(pyatspi.STATE_EDITABLE):
+            obj = obj.parent
+            continue
         try:
             editable = obj.queryEditableText()
             text = obj.queryText()
             return obj, editable, text
         except (NotImplementedError, LookupError, RuntimeError):
             obj = obj.parent
-    raise ProbeError("focused element has no AT-SPI EditableText interface")
+    raise ProbeError("focused element is not editable or has no EditableText interface")
 
 
 def _find_focused(pyatspi, max_nodes=20_000):
