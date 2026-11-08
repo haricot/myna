@@ -115,6 +115,7 @@ def _find_focused(pyatspi, max_nodes=20_000):
     desktop = pyatspi.Registry.getDesktop(0)
     stack = [desktop]
     visited = 0
+    focused_roles = []
     while stack:
         obj = stack.pop()
         visited += 1
@@ -122,14 +123,29 @@ def _find_focused(pyatspi, max_nodes=20_000):
             raise ProbeError("AT-SPI tree is too large to locate focus safely")
         try:
             if _is_focused(pyatspi, obj):
-                return _editable_ancestor(pyatspi, obj)
+                if len(focused_roles) < 8:
+                    # Roles and state booleans only: never print names, labels,
+                    # window titles or surrounding text from other apps.
+                    editable_state = obj.getState().contains(pyatspi.STATE_EDITABLE)
+                    focused_roles.append(
+                        f"{obj.getRoleName()}(editable={editable_state})"
+                    )
+                try:
+                    return _editable_ancestor(pyatspi, obj)
+                except ProbeError as exc:
+                    if "protected" in str(exc):
+                        raise
+                    # A focused container (frame/document) may have a focused
+                    # editable descendant. Keep walking instead of stopping
+                    # at the first focused but non-editable accessible.
             stack.extend(obj[i] for i in range(obj.childCount - 1, -1, -1))
         except ProbeError:
             raise
         except (LookupError, RuntimeError):
             # A window may disappear while the accessibility tree is walked.
             continue
-    raise ProbeError("no AT-SPI focused editable element found")
+    detail = ", ".join(focused_roles) if focused_roles else "none"
+    raise ProbeError(f"no AT-SPI focused editable element found; focused roles: {detail}")
 
 
 def _snapshot(text, max_chars: int) -> str:
