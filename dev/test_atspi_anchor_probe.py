@@ -2,7 +2,63 @@
 
 import unittest
 
-from atspi_anchor_probe import AnchorConflict, inserted_exactly, rebase_anchor
+from atspi_anchor_probe import (
+    AnchorConflict,
+    ProbeError,
+    _editable_ancestor,
+    _protected,
+    inserted_exactly,
+    rebase_anchor,
+)
+
+
+class AtspiStub:
+    """Only constants actually exposed by pyatspi on Arch are modeled."""
+
+    STATE_EDITABLE = "editable"
+    ROLE_PASSWORD_TEXT = "password text"
+
+
+class AccessibleStub:
+    def __init__(self, role="entry", states=("editable",)):
+        self.role = role
+        self.states = states
+        self.parent = None
+
+    def getState(self):
+        return self
+
+    def contains(self, state):
+        return state in self.states
+
+    def getRole(self):
+        return self.role
+
+    def queryEditableText(self):
+        return "editable-proxy"
+
+    def queryText(self):
+        return "text-proxy"
+
+
+class AccessibleFieldTests(unittest.TestCase):
+    def test_normal_entry_does_not_require_nonexistent_protected_state(self):
+        obj = AccessibleStub()
+        self.assertFalse(_protected(AtspiStub, obj))
+        self.assertEqual(
+            _editable_ancestor(AtspiStub, obj),
+            (obj, "editable-proxy", "text-proxy"),
+        )
+
+    def test_password_role_is_never_queried(self):
+        obj = AccessibleStub(role="password text")
+        self.assertTrue(_protected(AtspiStub, obj))
+        with self.assertRaisesRegex(ProbeError, "protected"):
+            _editable_ancestor(AtspiStub, obj)
+
+    def test_read_only_entry_is_refused(self):
+        with self.assertRaisesRegex(ProbeError, "not editable"):
+            _editable_ancestor(AtspiStub, AccessibleStub(states=()))
 
 
 class RebaseAnchorTests(unittest.TestCase):
