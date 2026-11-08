@@ -6,6 +6,7 @@ from atspi_anchor_probe import (
     AnchorConflict,
     ProbeError,
     _editable_ancestor,
+    _find_focused,
     _protected,
     inserted_exactly,
     rebase_anchor,
@@ -16,7 +17,15 @@ class AtspiStub:
     """Only constants actually exposed by pyatspi on Arch are modeled."""
 
     STATE_EDITABLE = "editable"
+    STATE_FOCUSED = "focused"
     ROLE_PASSWORD_TEXT = "password text"
+
+    class Registry:
+        desktop = None
+
+        @classmethod
+        def getDesktop(cls, _index):
+            return cls.desktop
 
 
 class AccessibleStub:
@@ -24,6 +33,22 @@ class AccessibleStub:
         self.role = role
         self.states = states
         self.parent = None
+        self.children = []
+
+    @property
+    def childCount(self):
+        return len(self.children)
+
+    def __getitem__(self, index):
+        return self.children[index]
+
+    def getRoleName(self):
+        return self.role
+
+    def append(self, child):
+        child.parent = self
+        self.children.append(child)
+        return child
 
     def getState(self):
         return self
@@ -59,6 +84,31 @@ class AccessibleFieldTests(unittest.TestCase):
     def test_read_only_entry_is_refused(self):
         with self.assertRaisesRegex(ProbeError, "not editable"):
             _editable_ancestor(AtspiStub, AccessibleStub(states=()))
+
+    def test_focused_container_is_not_mistaken_for_final_text_field(self):
+        desktop = AccessibleStub(role="desktop", states=())
+        frame = desktop.append(AccessibleStub(role="frame", states=("focused",)))
+        entry = frame.append(
+            AccessibleStub(role="entry", states=("focused", "editable"))
+        )
+        AtspiStub.Registry.desktop = desktop
+        self.assertEqual(
+            _find_focused(AtspiStub), (entry, "editable-proxy", "text-proxy")
+        )
+
+    def test_unmatched_focus_reports_role_without_reading_text(self):
+        desktop = AccessibleStub(role="desktop", states=())
+        desktop.append(AccessibleStub(role="frame", states=("focused",)))
+        AtspiStub.Registry.desktop = desktop
+        with self.assertRaisesRegex(ProbeError, "frame"):
+            _find_focused(AtspiStub)
+
+    def test_does_not_insert_into_unfocused_editable_entry(self):
+        desktop = AccessibleStub(role="desktop", states=())
+        desktop.append(AccessibleStub(role="entry", states=("editable",)))
+        AtspiStub.Registry.desktop = desktop
+        with self.assertRaisesRegex(ProbeError, "no AT-SPI focused"):
+            _find_focused(AtspiStub)
 
 
 class RebaseAnchorTests(unittest.TestCase):
