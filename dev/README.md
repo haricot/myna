@@ -47,9 +47,14 @@ Only the two configs stayed here:
 `atspi_anchor_probe.py` is the manual, read-only-by-default proof of concept.
 `atspi_anchor_firefox.py` automates its **real insertion** counterpart on the
 existing graphical session. It launches a dedicated Firefox with a throwaway
-WebDriver profile, opens a generated textarea, focuses it, types before a saved
-anchor and checks both the AT-SPI write location and whether the user's editing
-caret remained independent. It never targets a real document or browser profile.
+WebDriver profile, enables Firefox accessibility, opens a generated textarea
+with a unique AT-SPI accessible name, focuses it, types before a saved anchor
+and checks both the AT-SPI write location and whether the user's editing caret
+remained independent. It never targets a real document or browser profile.
+The unique name is necessary because Firefox/Wayland may report no AT-SPI
+`STATE_FOCUSED` despite WebDriver confirming focus; the test does not rely on
+that state for its scratch-field lookup. A failure reports only accessibility
+tree counts, never the names or contents of other application fields.
 
 Install `geckodriver` once (Arch/Manjaro: `sudo pacman -S geckodriver`), and
 run with the system Python that imports `pyatspi`:
