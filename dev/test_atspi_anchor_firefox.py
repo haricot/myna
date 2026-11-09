@@ -19,10 +19,17 @@ from test_atspi_anchor_probe import AccessibleStub, AtspiStub
 
 
 class ScratchField:
-    def __init__(self, insert_at_caret=False):
+    def __init__(
+        self, insert_at_caret=False, insert_moves_caret=False,
+        restore_caret=True, pretend_restore=False,
+    ):
         self.value = INITIAL_TEXT
         self.caret = 0
         self.insert_at_caret = insert_at_caret
+        self.insert_moves_caret = insert_moves_caret
+        self.restore_caret = restore_caret
+        self.pretend_restore = pretend_restore
+        self.caret_set_calls = []
         self.focused = True
 
     @property
@@ -41,6 +48,16 @@ class ScratchField:
         if self.insert_at_caret:
             position = self.caret
         self.value = self.value[:position] + payload + self.value[position:]
+        if self.insert_moves_caret:
+            self.caret = position + len(payload)
+        return True
+
+    def setCaretOffset(self, offset):
+        self.caret_set_calls.append(offset)
+        if not self.restore_caret:
+            return False
+        if not self.pretend_restore:
+            self.caret = offset
         return True
 
 
@@ -146,7 +163,7 @@ class WebDriverInputTests(unittest.TestCase):
 
 
 class FirefoxAnchorScenarioTests(unittest.TestCase):
-    def test_inserts_at_rebased_offset_with_independent_caret(self):
+    def test_inserts_at_rebased_offset_without_moving_caret(self):
         field = ScratchField()
         browser = BrowserStub(field)
         with (
@@ -168,6 +185,57 @@ class FirefoxAnchorScenarioTests(unittest.TestCase):
             + INITIAL_TEXT[ANCHOR_OFFSET:],
         )
         self.assertEqual(field.caret, len(PREFIX))
+        self.assertFalse(result.caret_restored)
+        self.assertEqual(result.caret_after_write, len(PREFIX))
+
+    def test_restores_editing_caret_after_firefox_moves_it_on_insert(self):
+        field = ScratchField(insert_moves_caret=True)
+        browser = BrowserStub(field)
+        with (
+            patch(
+                "atspi_anchor_firefox._find_named_editable",
+                return_value=(field, field, field),
+            ),
+            patch("atspi_anchor_firefox._is_focused", return_value=False),
+        ):
+            result = run_anchor_scenario(browser, object(), timeout=0.5)
+
+        self.assertEqual(field.caret_set_calls, [len(PREFIX)])
+        self.assertEqual(result.editing_caret_after, len(PREFIX))
+        self.assertEqual(result.caret_after_write, ANCHOR_OFFSET + len(PREFIX) + len(INSERTION))
+        self.assertTrue(result.caret_restored)
+        self.assertEqual(browser.state()["caret"], len(PREFIX))
+        self.assertEqual(
+            field.value,
+            PREFIX + INITIAL_TEXT[:ANCHOR_OFFSET] + INSERTION
+            + INITIAL_TEXT[ANCHOR_OFFSET:],
+        )
+
+    def test_rejects_false_success_of_caret_restoration(self):
+        field = ScratchField(insert_moves_caret=True, pretend_restore=True)
+        with (
+            patch(
+                "atspi_anchor_firefox._find_named_editable",
+                return_value=(field, field, field),
+            ),
+            patch("atspi_anchor_firefox._is_focused", return_value=False),
+        ):
+            with self.assertRaisesRegex(ProbeError, "caret.*not restored"):
+                run_anchor_scenario(BrowserStub(field), object(), timeout=0.03)
+        self.assertEqual(field.caret_set_calls, [len(PREFIX)])
+
+    def test_rejects_explicit_failure_to_restore_caret(self):
+        field = ScratchField(insert_moves_caret=True, restore_caret=False)
+        with (
+            patch(
+                "atspi_anchor_firefox._find_named_editable",
+                return_value=(field, field, field),
+            ),
+            patch("atspi_anchor_firefox._is_focused", return_value=False),
+        ):
+            with self.assertRaisesRegex(ProbeError, "caret.*restoration refused"):
+                run_anchor_scenario(BrowserStub(field), object(), timeout=0.03)
+        self.assertEqual(field.caret_set_calls, [len(PREFIX)])
 
     def test_rejects_write_at_editing_caret(self):
         field = ScratchField(insert_at_caret=True)
