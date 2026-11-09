@@ -41,3 +41,41 @@ Only the two configs stayed here:
 | `try-desktop.sh` | A desktop VM (GNOME, Xubuntu or Kubuntu) running HEAD's snap and deb with the host's audio; `make try-desktop`, see e2e-tests/README.md. |
 | `i18n.sh`, `ibus-doctor.sh` | Translation templates, IBus diagnosis. |
 | `purge.sh` | Remove every trace of a Myna install (snaps, snapd flag, shortcuts, dconf, stray files) to test a fresh install; `--deb` also purges myna-config. |
+
+## Experimental anchored dictation check (Firefox / AT-SPI)
+
+`atspi_anchor_probe.py` is the manual, read-only-by-default proof of concept.
+`atspi_anchor_firefox.py` automates its **real insertion** counterpart on the
+existing graphical session. It launches a dedicated Firefox with a throwaway
+WebDriver profile, enables Firefox accessibility, opens a generated textarea
+with a unique AT-SPI accessible name, focuses it, types before a saved anchor
+and checks both the AT-SPI write location and whether the user's editing caret
+stayed put or can be restored. If Firefox moves the editing caret as a side
+effect of `EditableText.insertText`, the probe calls AT-SPI
+`Text.setCaretOffset` to return it to the saved editing position, then checks
+the returned caret in **both** Firefox/WebDriver and AT-SPI and checks the text
+again. A positive return from the API without a real caret move is a failure.
+This is a **two-step restoration experiment**, not simultaneous independent
+carets: a brief cursor jump can remain visible, and concurrent typing between
+the insertion and restoration remains a race to solve before production use.
+It never targets a real document or browser profile.
+The unique name is necessary because Firefox/Wayland may report no AT-SPI
+`STATE_FOCUSED` despite WebDriver confirming focus; the test does not rely on
+that state for its scratch-field lookup. A failure reports only accessibility
+tree counts, never the names or contents of other application fields.
+
+Install `geckodriver` once (Arch/Manjaro: `sudo pacman -S geckodriver`), and
+run with the system Python that imports `pyatspi`:
+
+```shell
+/usr/bin/python3 dev/atspi_anchor_firefox.py \
+  --firefox /absolute/path/to/firefox
+```
+
+This is **not** a Myna injection backend or a completed feature. A compositor
+may prevent a newly launched window from acquiring OS focus under Wayland; in
+that case the test fails with a focus diagnostic without writing elsewhere.
+It must run in the actual logged-in desktop, not headlessly or on a private
+AT-SPI bus. Unit tests: `python3 -m unittest discover -s dev -p
+'test_atspi_anchor*.py' -v`. Live Firefox behavior still requires the desktop
+run above; the hermetic tests cannot establish real AT-SPI support.
