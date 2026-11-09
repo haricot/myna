@@ -6,6 +6,8 @@ focuses an isolated textarea, types a character at its start through WebDriver,
 then tries inserting at the original (rebased) AT-SPI anchor. The browser is
 driven in the existing desktop session; no nested GNOME Shell or private D-Bus
 session is started. Firefox must be visible (never run this headless).
+Checks whether an insertion-induced editing-caret move can be restored via
+AT-SPI Text.setCaretOffset; restoration is not an atomic two-caret feature.
 
 Run with the system Python (pyatspi must be importable):
 
@@ -60,7 +62,9 @@ class AnchorResult:
     original_anchor: int
     rebased_anchor: int
     editing_caret: int
+    caret_after_write: int
     editing_caret_after: int
+    caret_restored: bool
     atspi_focused: bool
 
 
@@ -241,20 +245,59 @@ def run_anchor_scenario(
     if after != expected_after:
         raise ProbeError("AT-SPI write was not confirmed at the requested offset")
 
+    if not _assert_our_window_focused(state):
+        raise ProbeError("Firefox focus was lost after the AT-SPI insertion")
+    caret_after_write = text.caretOffset
+    caret_restored = False
+    if caret_after_write != editing_caret or state.get("caret") != editing_caret:
+        # This is a separate AT-SPI request. We cannot claim that the caret
+        # stayed independent during the insert; Firefox may have moved it in
+        # between, and real user input may race this restoration step.
+        try:
+            restored = text.setCaretOffset(editing_caret)
+        except Exception as exc:
+            raise ProbeError(
+                "AT-SPI caret restoration failed "
+                f"({type(exc).__name__}); independent caret not supported"
+            ) from exc
+        if restored is False:
+            raise ProbeError(
+                "AT-SPI caret restoration refused; independent caret not supported"
+            )
+
+        def restored_caret():
+            current = browser.state()
+            if not _assert_our_window_focused(current):
+                raise ProbeError("Firefox focus was lost during caret restoration")
+            if current.get("value") != expected_after:
+                raise ProbeError("Firefox text changed during caret restoration")
+            if _snapshot(text, 10_000) != expected_after:
+                raise ProbeError("AT-SPI text changed during caret restoration")
+            return (
+                text.caretOffset == editing_caret
+                and current.get("caret") == editing_caret
+            )
+
+        try:
+            _wait_until(
+                restored_caret, timeout=timeout,
+                description="editing caret return in both AT-SPI and Firefox",
+            )
+        except ProbeError as exc:
+            raise ProbeError(
+                "AT-SPI caret not restored in Firefox after insertion "
+                f"({exc})"
+            ) from exc
+        caret_restored = True
+
     caret_after = text.caretOffset
-    if caret_after != editing_caret or state.get("caret") != editing_caret:
-        raise ProbeError(
-            f"text inserted, but editing caret moved: "
-            f"{editing_caret} -> {caret_after}; "
-            "independent caret is NOT yet supported"
-        )
     try:
         atspi_focused = _is_focused(pyatspi, obj)
     except (LookupError, RuntimeError):
         atspi_focused = False
     return AnchorResult(
-        original_anchor, rebased, editing_caret, caret_after,
-        atspi_focused,
+        original_anchor, rebased, editing_caret, caret_after_write,
+        caret_after, caret_restored, atspi_focused,
     )
 
 
@@ -443,8 +486,10 @@ def main(argv=None) -> int:
         return 1
     print(
         f"PASS: initial anchor {result.original_anchor} -> {result.rebased_anchor}; "
-        f"editing caret {result.editing_caret} -> {result.editing_caret_after}; "
+        f"editing caret {result.editing_caret} -> {result.caret_after_write} "
+        f"-> {result.editing_caret_after}; "
         "AT-SPI write verified at the anchor. "
+        f"caret_restored={result.caret_restored}; "
         f"AT-SPI FOCUSED={result.atspi_focused}."
     )
     return 0
