@@ -41,3 +41,28 @@ Only the two configs stayed here:
 | `try-desktop.sh` | A desktop VM (GNOME, Xubuntu or Kubuntu) running HEAD's snap and deb with the host's audio; `make try-desktop`, see e2e-tests/README.md. |
 | `i18n.sh`, `ibus-doctor.sh` | Translation templates, IBus diagnosis. |
 | `purge.sh` | Remove every trace of a Myna install (snaps, snapd flag, shortcuts, dconf, stray files) to test a fresh install; `--deb` also purges myna-config. |
+
+## Experimental anchored dictation check (Firefox / AT-SPI)
+
+`atspi_anchor_probe.py` is the manual, read-only-by-default proof of concept.
+`atspi_anchor_firefox.py` automates its **real insertion** counterpart on the
+existing graphical session. It launches a dedicated Firefox with a throwaway
+WebDriver profile, opens a generated textarea, focuses it, types before a saved
+anchor and checks both the AT-SPI write location and whether the user's editing
+caret remained independent. It never targets a real document or browser profile.
+
+Install `geckodriver` once (Arch/Manjaro: `sudo pacman -S geckodriver`), and
+run with the system Python that imports `pyatspi`:
+
+```shell
+/usr/bin/python3 dev/atspi_anchor_firefox.py \
+  --firefox /absolute/path/to/firefox
+```
+
+This is **not** a Myna injection backend or a completed feature. A compositor
+may prevent a newly launched window from acquiring OS focus under Wayland; in
+that case the test fails with a focus diagnostic without writing elsewhere.
+It must run in the actual logged-in desktop, not headlessly or on a private
+AT-SPI bus. Unit tests: `python3 -m unittest discover -s dev -p
+'test_atspi_anchor*.py' -v`. Live Firefox behavior still requires the desktop
+run above; the hermetic tests cannot establish real AT-SPI support.
