@@ -54,8 +54,11 @@ a private, user-owned runtime directory, never a public `/tmp` socket.
 
 In Firefox Nightly 162, open `about:debugging#/runtime/this-firefox`, choose
 "Load Temporary Add-on", and select this directory's `manifest.json`. Focus a
-normal textarea, position the caret, click the Myna extension button to arm
-it, then use your normal Myna dictation shortcut. Subsequent committed segments
+normal textarea, position the caret, then activate the extension to arm
+it. To avoid toolbar-induced focus changes, assign a keyboard shortcut in
+Firefox's *Manage Extension Shortcuts* screen: the MV3 `_execute_action` command
+is deliberately declared without a default key to avoid stealing another
+shortcut. Use your normal Myna dictation shortcut. Subsequent committed segments
 must be inserted at that anchor even if you have moved the caret. Click the
 extension button again to disarm. Use a disposable Firefox profile with no
 signed-in accounts for the first native tests.

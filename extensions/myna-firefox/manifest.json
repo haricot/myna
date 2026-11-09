@@ -13,6 +13,11 @@
   "action": {
     "default_title": "Armer l'ancre de dictée Myna"
   },
+  "commands": {
+    "_execute_action": {
+      "description": "Armer ou désarmer le champ de dictée Myna"
+    }
+  },
   "background": {
     "scripts": ["background.js"]
   }
