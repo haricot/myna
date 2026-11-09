@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Myna Firefox Anchor (experimental)",
+  "version": "0.0.0",
+  "description": "Explicitly arm a Firefox text field for focus-independent Myna dictation.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "firefox-anchor@myna.local",
+      "strict_min_version": "140.0"
+    }
+  },
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "action": {
+    "default_title": "Armer l'ancre de dictée Myna"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  }
+}
