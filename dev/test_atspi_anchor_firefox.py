@@ -10,9 +10,12 @@ from atspi_anchor_firefox import (
     PREFIX,
     INSERTION,
     FirefoxField,
+    _find_named_editable,
     firefox_capabilities,
+    scratch_html,
     run_anchor_scenario,
 )
+from test_atspi_anchor_probe import AccessibleStub, AtspiStub
 
 
 class ScratchField:
@@ -68,14 +71,55 @@ class FirefoxCapabilitiesTests(unittest.TestCase):
         caps = firefox_capabilities("/test/nightly/firefox", wayland=True)
         opts = caps["capabilities"]["alwaysMatch"]["moz:firefoxOptions"]
         self.assertEqual(opts["binary"], "/test/nightly/firefox")
-        self.assertEqual(opts["prefs"]["accessibility.force_disabled"], 0)
+        self.assertEqual(opts["prefs"]["accessibility.force_disabled"], -1)
         self.assertEqual(opts["env"]["MOZ_ENABLE_WAYLAND"], "1")
+        self.assertEqual(opts["env"]["GNOME_ACCESSIBILITY"], "1")
         self.assertNotIn("-profile", opts.get("args", []))
 
     def test_x11_run_does_not_force_wayland(self):
         caps = firefox_capabilities("/test/nightly/firefox", wayland=False)
         opts = caps["capabilities"]["alwaysMatch"]["moz:firefoxOptions"]
         self.assertNotIn("MOZ_ENABLE_WAYLAND", opts["env"])
+
+
+class NamedAccessibleTests(unittest.TestCase):
+    def test_generated_field_has_unique_accessible_name(self):
+        html = scratch_html("MYNA-A11Y-TEST-123")
+        self.assertIn('aria-label="MYNA-A11Y-TEST-123"', html)
+        self.assertIn(INITIAL_TEXT, html)
+
+    def test_finds_exact_field_even_without_atspi_focused_state(self):
+        desktop = AccessibleStub(role="desktop", states=())
+        application = desktop.append(AccessibleStub(role="application", states=()))
+        application.name = "Firefox Nightly"
+        unrelated = application.append(AccessibleStub(role="entry"))
+        unrelated.name = "Unrelated real field"
+        target = application.append(AccessibleStub(role="entry", states=("editable",)))
+        target.name = "MYNA-UNIQUE-SCRATCH"
+        AtspiStub.Registry.desktop = desktop
+        self.assertEqual(
+            _find_named_editable(AtspiStub, "MYNA-UNIQUE-SCRATCH"),
+            (target, "editable-proxy", "text-proxy"),
+        )
+
+    def test_no_named_field_reports_tree_not_private_names(self):
+        desktop = AccessibleStub(role="desktop", states=())
+        application = desktop.append(AccessibleStub(role="application", states=()))
+        application.name = "A private app"
+        AtspiStub.Registry.desktop = desktop
+        with self.assertRaisesRegex(ProbeError, "firefox_apps=0") as raised:
+            _find_named_editable(AtspiStub, "MYNA-UNIQUE-SCRATCH")
+        self.assertNotIn("A private app", str(raised.exception))
+
+    def test_password_role_is_rejected_even_if_name_matches(self):
+        desktop = AccessibleStub(role="desktop", states=())
+        protected = desktop.append(
+            AccessibleStub(role="password text", states=("editable",))
+        )
+        protected.name = "MYNA-UNIQUE-SCRATCH"
+        AtspiStub.Registry.desktop = desktop
+        with self.assertRaisesRegex(ProbeError, "protected"):
+            _find_named_editable(AtspiStub, "MYNA-UNIQUE-SCRATCH")
 
 
 class WebDriverInputTests(unittest.TestCase):
@@ -107,10 +151,10 @@ class FirefoxAnchorScenarioTests(unittest.TestCase):
         browser = BrowserStub(field)
         with (
             patch(
-                "atspi_anchor_firefox._find_focused",
+                "atspi_anchor_firefox._find_named_editable",
                 return_value=(field, field, field),
             ),
-            patch("atspi_anchor_firefox._is_focused", return_value=True),
+            patch("atspi_anchor_firefox._is_focused", return_value=False),
         ):
             result = run_anchor_scenario(browser, object(), timeout=0.5)
 
@@ -130,10 +174,10 @@ class FirefoxAnchorScenarioTests(unittest.TestCase):
         browser = BrowserStub(field)
         with (
             patch(
-                "atspi_anchor_firefox._find_focused",
+                "atspi_anchor_firefox._find_named_editable",
                 return_value=(field, field, field),
             ),
-            patch("atspi_anchor_firefox._is_focused", return_value=True),
+            patch("atspi_anchor_firefox._is_focused", return_value=False),
         ):
             with self.assertRaisesRegex(ProbeError, "not at the anchor"):
                 run_anchor_scenario(browser, object(), timeout=0.5)
@@ -150,10 +194,10 @@ class FirefoxAnchorScenarioTests(unittest.TestCase):
         browser.type_at = lose_focus
         with (
             patch(
-                "atspi_anchor_firefox._find_focused",
+                "atspi_anchor_firefox._find_named_editable",
                 return_value=(field, field, field),
             ),
-            patch("atspi_anchor_firefox._is_focused", return_value=True),
+            patch("atspi_anchor_firefox._is_focused", return_value=False),
         ):
             with self.assertRaisesRegex(ProbeError, "focus"):
                 run_anchor_scenario(browser, object(), timeout=0.01)
