@@ -17,9 +17,11 @@ Only a generated scratch field is ever modified. User profiles are not used.
 
 import argparse
 from dataclasses import dataclass
+from html import escape
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import socket
 import subprocess
@@ -31,7 +33,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from atspi_anchor_probe import (
     ProbeError,
-    _find_focused,
+    _editable_ancestor,
     _is_focused,
     _snapshot,
     inserted_exactly,
@@ -46,8 +48,8 @@ INSERTION = " [MYNA PROBE]"
 SCRATCH_HTML = (
     "<!doctype html><html lang='fr'><meta charset='utf-8'>"
     "<title>MYNA ANCHOR AUTOMATED TEST</title>"
-    "<label for='myna-anchor-test'>Champ provisoire</label>"
-    f"<textarea id='myna-anchor-test' rows='12' cols='55'>{INITIAL_TEXT}</textarea>"
+    "<textarea id='myna-anchor-test' aria-label=\"{{label}}\" "
+    f"rows='12' cols='55'>{INITIAL_TEXT}</textarea>"
     "</html>"
 )
 ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf"
@@ -59,10 +61,16 @@ class AnchorResult:
     rebased_anchor: int
     editing_caret: int
     editing_caret_after: int
+    atspi_focused: bool
+
+
+def scratch_html(unique_label: str) -> str:
+    """Give the disposable field an unguessable, run-specific AT-SPI name."""
+    return SCRATCH_HTML.replace("{{label}}", escape(unique_label, quote=True))
 
 
 def firefox_capabilities(firefox_path: str, *, wayland: bool) -> dict:
-    env = {"MOZ_ACCESSIBILITY_ATK2": "1"}
+    env = {"MOZ_ACCESSIBILITY_ATK2": "1", "GNOME_ACCESSIBILITY": "1"}
     if wayland:
         env["MOZ_ENABLE_WAYLAND"] = "1"
     return {
@@ -72,7 +80,7 @@ def firefox_capabilities(firefox_path: str, *, wayland: bool) -> dict:
                 "moz:firefoxOptions": {
                     "binary": firefox_path,
                     "env": env,
-                    "prefs": {"accessibility.force_disabled": 0},
+                    "prefs": {"accessibility.force_disabled": -1},
                 },
             }
         }
@@ -99,11 +107,62 @@ def _assert_our_window_focused(state: dict) -> bool:
     return bool(state.get("active") and state.get("windowFocused"))
 
 
-def run_anchor_scenario(browser, pyatspi, *, timeout: float = 20.0) -> AnchorResult:
+def _find_named_editable(pyatspi, unique_label: str, max_nodes: int = 20_000):
+    """Find only our disposable field, even when AT-SPI lacks FOCUSED state.
+
+    Never query the text content or EditableText interface of an unrelated
+    accessible. Diagnostics expose only tree sizes, not other app/field names.
+    """
+    desktop = pyatspi.Registry.getDesktop(0)
+    if desktop is None:
+        raise ProbeError("AT-SPI desktop is unavailable in this session")
+    try:
+        app_count = desktop.childCount
+    except (LookupError, RuntimeError) as exc:
+        raise ProbeError("AT-SPI desktop tree is unavailable") from exc
+    firefox_apps = 0
+    for i in range(app_count):
+        try:
+            app = desktop[i]
+            name = (getattr(app, "name", "") or "").lower()
+            if "firefox" in name or "nightly" in name:
+                firefox_apps += 1
+        except (LookupError, RuntimeError):
+            continue
+
+    visited = 0
+    stack = [desktop]
+    while stack:
+        obj = stack.pop()
+        visited += 1
+        if visited > max_nodes:
+            raise ProbeError(
+                f"AT-SPI tree too large (apps={app_count}, "
+                f"firefox_apps={firefox_apps}, nodes={visited})"
+            )
+        try:
+            if getattr(obj, "name", None) == unique_label:
+                # Only our randomly named scratch object is queried for text.
+                return _editable_ancestor(pyatspi, obj)
+            stack.extend(obj[i] for i in range(obj.childCount - 1, -1, -1))
+        except ProbeError:
+            raise
+        except (LookupError, RuntimeError):
+            continue
+    raise ProbeError(
+        f"unique scratch field absent from AT-SPI "
+        f"(apps={app_count}, firefox_apps={firefox_apps}, nodes={visited}); "
+        "Firefox may not have published its accessibility tree"
+    )
+
+
+def run_anchor_scenario(
+    browser, pyatspi, *, scratch_label="MYNA-TEST-DEFAULT", timeout: float = 20.0
+) -> AnchorResult:
     """Drive the disposable Firefox field, checking both WebDriver and AT-SPI.
 
-    The original accessible target must remain focused until the insertion.
-    No write is attempted unless the test document and caret match exactly.
+    A unique field name and WebDriver's DOM focus + exact read-back guard the
+    target. AT-SPI FOCUSED may be absent, so it is recorded but not required.
     """
     browser.focus_at(ANCHOR_OFFSET)
 
@@ -117,7 +176,7 @@ def run_anchor_scenario(browser, pyatspi, *, timeout: float = 20.0) -> AnchorRes
             )
         if state.get("value") != INITIAL_TEXT:
             raise ProbeError("scratch field did not contain the expected initial text")
-        obj, editable, text = _find_focused(pyatspi)
+        obj, editable, text = _find_named_editable(pyatspi, scratch_label)
         if _snapshot(text, 10_000) != INITIAL_TEXT:
             raise ProbeError("AT-SPI focus is not on the scratch Firefox field")
         if text.caretOffset != ANCHOR_OFFSET:
@@ -143,8 +202,8 @@ def run_anchor_scenario(browser, pyatspi, *, timeout: float = 20.0) -> AnchorRes
             raise ProbeError(
                 "WebDriver edit or editing-caret move is not yet observable"
             )
-        if not _is_focused(pyatspi, obj) or _snapshot(text, 10_000) != expected_current:
-            raise ProbeError("AT-SPI target lost focus or has not observed the edit")
+        if _snapshot(text, 10_000) != expected_current:
+            raise ProbeError("AT-SPI target has not observed the edit")
         if text.caretOffset != len(PREFIX):
             raise ProbeError("AT-SPI editing caret differs from Firefox's caret")
         return True
@@ -153,15 +212,14 @@ def run_anchor_scenario(browser, pyatspi, *, timeout: float = 20.0) -> AnchorRes
     rebased = rebase_anchor(before, expected_current, original_anchor)
     editing_caret = text.caretOffset
 
-    # Fail closed on document/focus drift. No other field is ever eligible for
-    # insertion; this uses the exact accessible object captured above.
+    # Fail closed on document/DOM focus drift. The original accessible object
+    # is uniquely named and belongs to the throwaway Firefox instance.
     state = browser.state()
     if (
         not _assert_our_window_focused(state)
         or state.get("value") != expected_current
         or state.get("caret") != editing_caret
         or _snapshot(text, 10_000) != expected_current
-        or not _is_focused(pyatspi, obj)
     ):
         raise ProbeError("Firefox field lost focus or changed before insertion")
 
@@ -190,7 +248,14 @@ def run_anchor_scenario(browser, pyatspi, *, timeout: float = 20.0) -> AnchorRes
             f"{editing_caret} -> {caret_after}; "
             "independent caret is NOT yet supported"
         )
-    return AnchorResult(original_anchor, rebased, editing_caret, caret_after)
+    try:
+        atspi_focused = _is_focused(pyatspi, obj)
+    except (LookupError, RuntimeError):
+        atspi_focused = False
+    return AnchorResult(
+        original_anchor, rebased, editing_caret, caret_after,
+        atspi_focused,
+    )
 
 
 class WebDriverClient:
@@ -316,14 +381,18 @@ def _run_live(firefox: Path, geckodriver: Path, *, timeout: float):
         )
         result = client.command("POST", "/session", payload)
         session = result["sessionId"]
-        url = "data:text/html;charset=utf-8," + quote(SCRATCH_HTML, safe="")
+        scratch_label = "MYNA-A11Y-" + secrets.token_hex(12)
+        url = "data:text/html;charset=utf-8," + quote(
+            scratch_html(scratch_label), safe=""
+        )
         client.command("POST", f"/session/{session}/url", {"url": url})
         element = client.command(
             "POST", f"/session/{session}/element",
             {"using": "css selector", "value": "#myna-anchor-test"},
         )[ELEMENT_KEY]
         return run_anchor_scenario(
-            FirefoxField(client, session, element), pyatspi, timeout=timeout
+            FirefoxField(client, session, element), pyatspi,
+            scratch_label=scratch_label, timeout=timeout,
         )
     finally:
         if session is not None:
@@ -375,7 +444,8 @@ def main(argv=None) -> int:
     print(
         f"PASS: initial anchor {result.original_anchor} -> {result.rebased_anchor}; "
         f"editing caret {result.editing_caret} -> {result.editing_caret_after}; "
-        "AT-SPI write verified at the anchor."
+        "AT-SPI write verified at the anchor. "
+        f"AT-SPI FOCUSED={result.atspi_focused}."
     )
     return 0
 
