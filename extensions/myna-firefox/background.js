@@ -1,7 +1,6 @@
 "use strict";
 
-// Native Messaging host is not bundled with this feasibility spike. A future
-// Myna injection adapter must own the local protocol and call this extension.
+// The optional `myna-firefox-host` relays bounded messages to the Rust daemon.
 const HOST_NAME = "myna.firefox_anchor";
 let active = null;
 
@@ -48,7 +47,7 @@ browser.action.onClicked.addListener(async (tab) => {
           sequence: message.sequence,
           text: message.text
         });
-        port.postMessage({ type: "commit-result", session_id: state.sessionId, sequence: message.sequence, ok: response?.ok === true });
+        port.postMessage({ type: "commit-result", protocol: 1, session_id: state.sessionId, sequence: message.sequence, ok: response?.ok === true });
         if (!response?.ok) await stop();
       } catch (_) {
         await stop();

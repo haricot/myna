@@ -114,3 +114,46 @@ test("consecutive dictated repeats keep a live anchor without double rebasing", 
   assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 1, text: "a" }).ok, true);
   assert.equal(h.field.value, "aaaaaa");
 });
+
+test("a moved selection stays intact when dictation commits at its independent anchor", () => {
+  const h = createHarness(new Textarea("bonjour monde", 8));
+  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, true);
+  h.field.selectionStart = 0;
+  h.field.selectionEnd = 7;
+  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "cher " }).ok, true);
+  assert.equal(h.field.value, "bonjour cher monde");
+  assert.equal(h.field.selectionStart, 0);
+  assert.equal(h.field.selectionEnd, 7);
+});
+
+test("independent user edits remain stable across multiple dictation commits", () => {
+  const h = createHarness(new Textarea("abcdEFGH", 4));
+  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, true);
+  h.field.selectionStart = 1;
+  h.field.selectionEnd = 1;
+  h.field.type("X");
+  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: " bon" }).ok, true);
+  h.field.selectionStart = h.field.value.length;
+  h.field.selectionEnd = h.field.value.length;
+  h.field.type("!");
+  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 1, text: "jour" }).ok, true);
+  assert.equal(h.field.value, "aXbcd bonjourEFGH!");
+  assert.equal(h.field.selectionStart, h.field.value.length);
+});
+
+test("contenteditable and non-collapsed selections are deliberately unsupported", () => {
+  const h = createHarness({ isContentEditable: true, isConnected: true });
+  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, false);
+  const field = new Textarea("abcdefgh", 2);
+  field.selectionEnd = 6;
+  const selected = createHarness(field);
+  assert.equal(selected.send({ type: "myna.anchor.arm", session_id: "one" }).ok, false);
+});
+
+test("a field that becomes readonly fails closed", () => {
+  const h = createHarness(new Textarea("abcdef", 3));
+  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, true);
+  h.field.readOnly = true;
+  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" }).ok, false);
+  assert.equal(h.field.value, "abcdef");
+});
