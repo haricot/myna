@@ -50,7 +50,15 @@ existing graphical session. It launches a dedicated Firefox with a throwaway
 WebDriver profile, enables Firefox accessibility, opens a generated textarea
 with a unique AT-SPI accessible name, focuses it, types before a saved anchor
 and checks both the AT-SPI write location and whether the user's editing caret
-remained independent. It never targets a real document or browser profile.
+stayed put or can be restored. If Firefox moves the editing caret as a side
+effect of `EditableText.insertText`, the probe calls AT-SPI
+`Text.setCaretOffset` to return it to the saved editing position, then checks
+the returned caret in **both** Firefox/WebDriver and AT-SPI and checks the text
+again. A positive return from the API without a real caret move is a failure.
+This is a **two-step restoration experiment**, not simultaneous independent
+carets: a brief cursor jump can remain visible, and concurrent typing between
+the insertion and restoration remains a race to solve before production use.
+It never targets a real document or browser profile.
 The unique name is necessary because Firefox/Wayland may report no AT-SPI
 `STATE_FOCUSED` despite WebDriver confirming focus; the test does not rely on
 that state for its scratch-field lookup. A failure reports only accessibility
