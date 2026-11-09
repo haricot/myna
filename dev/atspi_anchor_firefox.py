@@ -140,7 +140,9 @@ def run_anchor_scenario(browser, pyatspi, *, timeout: float = 20.0) -> AnchorRes
         if not _assert_our_window_focused(state):
             raise ProbeError("Firefox focus was lost during the editing step")
         if state.get("value") != expected_current or state.get("caret") != len(PREFIX):
-            raise ProbeError("WebDriver edit or editing-caret move is not yet observable")
+            raise ProbeError(
+                "WebDriver edit or editing-caret move is not yet observable"
+            )
         if not _is_focused(pyatspi, obj) or _snapshot(text, 10_000) != expected_current:
             raise ProbeError("AT-SPI target lost focus or has not observed the edit")
         if text.caretOffset != len(PREFIX):
@@ -184,7 +186,8 @@ def run_anchor_scenario(browser, pyatspi, *, timeout: float = 20.0) -> AnchorRes
     caret_after = text.caretOffset
     if caret_after != editing_caret or state.get("caret") != editing_caret:
         raise ProbeError(
-            f"text inserted, but editing caret moved: {editing_caret} -> {caret_after}; "
+            f"text inserted, but editing caret moved: "
+            f"{editing_caret} -> {caret_after}; "
             "independent caret is NOT yet supported"
         )
     return AnchorResult(original_anchor, rebased, editing_caret, caret_after)
@@ -211,7 +214,9 @@ class WebDriverClient:
         except HTTPError as exc:
             try:
                 detail = json.load(exc)["value"]
-                message = detail.get("message", detail.get("error", "WebDriver rejected command"))
+                message = detail.get(
+                    "message", detail.get("error", "WebDriver rejected command")
+                )
             except (ValueError, KeyError, TypeError):
                 message = "WebDriver rejected command"
             raise ProbeError(f"WebDriver HTTP {exc.code}: {message}") from exc
@@ -236,7 +241,9 @@ class FirefoxField:
         )
 
     def focus_at(self, offset: int):
-        self.client.command("POST", f"/session/{self.session}/element/{self.element}/click", {})
+        self.client.command(
+            "POST", f"/session/{self.session}/element/{self.element}/click", {}
+        )
         self._script(
             "const t=document.getElementById('myna-anchor-test');"
             "t.focus();t.setSelectionRange(arguments[0],arguments[0]);",
@@ -272,7 +279,9 @@ def _run_live(firefox: Path, geckodriver: Path, *, timeout: float):
     try:
         import pyatspi
     except ImportError as exc:
-        raise ProbeError("pyatspi unavailable; use /usr/bin/python3 and python-atspi") from exc
+        raise ProbeError(
+            "pyatspi unavailable; use /usr/bin/python3 and python-atspi"
+        ) from exc
 
     if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
         raise ProbeError("a running graphical session is required; do not use headless")
@@ -280,7 +289,10 @@ def _run_live(firefox: Path, geckodriver: Path, *, timeout: float):
     port = _free_loopback_port()
     client = WebDriverClient(port)
     process = subprocess.Popen(
-        [str(geckodriver), "--host", "127.0.0.1", "--port", str(port), "--log", "error"],
+        [
+            str(geckodriver), "--host", "127.0.0.1", "--port", str(port),
+            "--log", "error",
+        ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -289,7 +301,9 @@ def _run_live(firefox: Path, geckodriver: Path, *, timeout: float):
     try:
         def server_ready():
             if process.poll() is not None:
-                raise OSError(f"geckodriver stopped prematurely (exit {process.returncode})")
+                raise OSError(
+                    f"geckodriver stopped prematurely (exit {process.returncode})"
+                )
             try:
                 status = client.command("GET", "/status")
                 return status if status.get("ready") else None
@@ -297,7 +311,9 @@ def _run_live(firefox: Path, geckodriver: Path, *, timeout: float):
                 return None
 
         _wait_until(server_ready, timeout=timeout, description="geckodriver startup")
-        payload = firefox_capabilities(str(firefox), wayland=bool(os.environ.get("WAYLAND_DISPLAY")))
+        payload = firefox_capabilities(
+            str(firefox), wayland=bool(os.environ.get("WAYLAND_DISPLAY"))
+        )
         result = client.command("POST", "/session", payload)
         session = result["sessionId"]
         url = "data:text/html;charset=utf-8," + quote(SCRATCH_HTML, safe="")
@@ -306,7 +322,9 @@ def _run_live(firefox: Path, geckodriver: Path, *, timeout: float):
             "POST", f"/session/{session}/element",
             {"using": "css selector", "value": "#myna-anchor-test"},
         )[ELEMENT_KEY]
-        return run_anchor_scenario(FirefoxField(client, session, element), pyatspi, timeout=timeout)
+        return run_anchor_scenario(
+            FirefoxField(client, session, element), pyatspi, timeout=timeout
+        )
     finally:
         if session is not None:
             try:
@@ -324,9 +342,18 @@ def _run_live(firefox: Path, geckodriver: Path, *, timeout: float):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--firefox", type=Path, required=True, help="full path to Firefox Nightly binary")
-    parser.add_argument("--geckodriver", default="geckodriver", help="geckodriver executable or path")
-    parser.add_argument("--timeout", type=float, default=20.0, help="seconds per browser/AT-SPI stage")
+    parser.add_argument(
+        "--firefox",
+        type=Path,
+        required=True,
+        help="full path to Firefox Nightly binary",
+    )
+    parser.add_argument(
+        "--geckodriver", default="geckodriver", help="geckodriver executable or path"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=20.0, help="seconds per browser/AT-SPI stage"
+    )
     args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
@@ -336,7 +363,10 @@ def main(argv=None) -> int:
         parser.error(f"Firefox executable not found: {firefox}")
     if driver is None:
         parser.error("geckodriver is missing; install once: sudo pacman -S geckodriver")
-    print("Launching disposable Firefox profile; testing AT-SPI anchor without any clicks...")
+    print(
+        "Launching disposable Firefox profile; "
+        "testing AT-SPI anchor without any clicks..."
+    )
     try:
         result = _run_live(firefox, Path(driver), timeout=args.timeout)
     except (ProbeError, ValueError, KeyError, OSError) as exc:
