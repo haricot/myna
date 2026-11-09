@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 19985)
-Total output lines: 2007
-
 //! `myna-desktop` — the push-to-talk dictation app (plan T21/T22).
 //!
 //! Composes activation, the IBus text injector, and an activity indicator over a
@@ -740,7 +737,429 @@ async fn run_controller(
             pump_bus.clone(),
             restart.clone(),
         ))
-   …3985 tokens truncated…ttings, None);
+        .preedit(live.preedit.clone())
+        .auto_stop(live.auto_stop.clone());
+
+    let mut controller = match resolved.activation {
+        // Debug only, and the one trigger whose end is a real user intent:
+        // Ctrl-D means "stop", so it is not retried.
+        Activation::Stdin => builder.trigger(StdinTrigger::new()).build(),
+        Activation::Control => {
+            // Read by Myna Settings releases that also knew the portal.
+            if let Some(bus) = &pump_bus {
+                bus.lock()
+                    .await
+                    .set_property("Activation", PropertyValue::Str("control".into()))
+                    .await;
+            }
+            tokio::spawn(listen(control_path(&args), trigger.poke()));
+            builder.trigger(trigger).build()
+        }
+    };
+
+    banner(&args, &resolved);
+    // A served bus that dies takes the daemon with it (`ZbusBus::lost`):
+    // non-zero, so `Restart=on-failure` starts a fresh one on the new bus.
+    let bus_lost = bus_lost.unwrap_or_else(|| futures_util::future::pending().boxed());
+    tokio::select! {
+        () = controller.run() => {
+            println!("bye");
+            ExitCode::SUCCESS
+        }
+        () = bus_lost => {
+            eprintln!(
+                "session bus connection lost (logout?); exiting so the service restarts on the new bus"
+            );
+            ExitCode::FAILURE
+        }
+        // A model connected after this process started is mounted only in
+        // the namespace a fresh process joins (`Unusable::unmounted`). The
+        // press that found it shows its notice for a moment first.
+        () = async {
+            restart.notified().await;
+            tokio::time::sleep(RESTART_GRACE).await;
+        } => {
+            eprintln!(
+                "a model was connected after this daemon started; exiting so the service restarts and can see it"
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// How long the notice of a press that needs a restart shows before it.
+const RESTART_GRACE: Duration = Duration::from_secs(3);
+
+fn banner(args: &Args, resolved: &Resolved) {
+    let sock = args
+        .backend
+        .as_ref()
+        .map(|b| b.describe())
+        .unwrap_or_default();
+    match resolved.activation {
+        Activation::Stdin => println!(
+            "myna-desktop → {sock} — DEBUG stdin: Enter to start/stop (injects into THIS terminal)"
+        ),
+        Activation::Control => {
+            println!(
+                "myna-desktop → {sock} — daemon ready; tap your dictation shortcut to start/stop."
+            );
+            println!(
+                "  if you haven't bound one yet: `myna-desktop --install-shortcut '<Super>t>'"
+            );
+            println!(
+                "  or bind a keyboard shortcut (Myna Settings does it) to: `{}`",
+                toggle_command()
+            );
+        }
+    }
+}
+
+fn exe_path() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "myna-desktop".to_string())
+}
+
+/// The command a desktop shortcut should invoke to poke the daemon. Under
+/// snap confinement `current_exe` is a *revisioned* path that goes stale on
+/// refresh — use the stable `/snap/bin/<instance>.toggle` entry instead.
+fn toggle_command() -> String {
+    if let Ok(instance) = std::env::var("SNAP_INSTANCE_NAME") {
+        if !instance.is_empty() {
+            return format!("/snap/bin/{instance}.toggle");
+        }
+    }
+    format!("{} --toggle", exe_path())
+}
+
+/// `--install-shortcut <accel>`: bind a GNOME custom keybinding to the
+/// toggle, appending to any existing custom keybindings (never clobbering).
+///
+/// Through dconf, which needs no schema: the snap cannot see the host's, and
+/// gio there writes a keyfile. dconf reads `$XDG_CONFIG_HOME/dconf/user`
+/// directly but writes through the session's dconf-service, which always
+/// writes the real one; the snap points `XDG_CONFIG_HOME` there. An
+/// unreadable database reads as no keybindings, and the merge would then
+/// replace the user's list, so that refuses.
+fn install_shortcut(accel: &str) -> ExitCode {
+    const LIST: &str = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings";
+    let entry = format!("{LIST}/myna/");
+    let command = toggle_command();
+
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+        });
+    let database = config.join("dconf/user");
+    if let Err(e) = std::fs::File::open(&database) {
+        eprintln!(
+            "cannot read {}: {e} - not touching keybindings.",
+            database.display()
+        );
+        eprintln!("bind one by hand: Settings > Keyboard > Custom Shortcuts > `{command}`");
+        return ExitCode::FAILURE;
+    }
+
+    let current = Command::new("dconf")
+        .args(["read", LIST])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let ok = [
+        (
+            LIST.to_owned(),
+            custom_keybindings_with(current.trim(), &entry),
+        ),
+        (format!("{entry}name"), gvariant_string("myna dictation")),
+        (format!("{entry}command"), gvariant_string(&command)),
+        (format!("{entry}binding"), gvariant_string(accel)),
+    ]
+    .iter()
+    .all(|(key, value)| {
+        Command::new("dconf")
+            .args(["write", key, value])
+            .status()
+            .is_ok_and(|s| s.success())
+    });
+
+    if ok {
+        println!("bound {accel} → `{command}`");
+        println!("start the daemon, focus a field, tap {accel}.");
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("failed to set the GNOME keybinding through dconf.");
+        eprintln!("bind one by hand: Settings > Keyboard > Custom Shortcuts > `{command}`");
+        ExitCode::FAILURE
+    }
+}
+
+/// The custom keybinding paths `current` lists (dconf's text, empty when
+/// unset), with `entry` first if it is not there yet.
+fn custom_keybindings_with(current: &str, entry: &str) -> String {
+    let quoted = format!("'{entry}'");
+    if current.contains(&quoted) {
+        current.to_owned()
+    } else if matches!(current, "" | "[]" | "@as []") {
+        format!("[{quoted}]")
+    } else {
+        current.replacen('[', &format!("[{quoted}, "), 1)
+    }
+}
+
+/// `text` as a GVariant string literal, as `dconf write` takes it.
+fn gvariant_string(text: &str) -> String {
+    format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// `--status`: one screen answering "what state is dictation in, and why".
+///
+/// Every line of this was previously somewhere else - the persisted values in
+/// the settings store, what they resolved to and why in a journal line printed
+/// once at startup, the live state on the bus, the backend socket nowhere at
+/// all - so
+/// answering the question meant knowing all four places and how they compose.
+/// The composition is what this prints: not just the value in force, but where
+/// it came from, because "I set that and nothing happened" is the question
+/// being asked most of the time.
+fn print_status(args: &Args) -> ExitCode {
+    let rt = match cli_runtime() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("cannot start async runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Asked before the settings table: the mode in force depends on it.
+    let provider = args.backend.as_ref().map(BackendSocket::resolve);
+    let caps = match &provider {
+        Some(Ok(provider)) => {
+            Some(rt.block_on(myna_orchestrator::query_capabilities(&provider.socket)))
+        }
+        _ => None,
+    };
+    let backend_streams = match &caps {
+        Some(Ok(caps)) => caps.streaming,
+        _ => None,
+    };
+
+    let store = myna_core::settings::Store::open();
+    let settings = myna_core::Settings::load();
+    let resolved = Resolved::new(args, &settings, backend_streams);
+
+    println!(
+        "settings   {} ({})",
+        myna_core::settings::SCHEMA_ID,
+        match store {
+            Some(_) => "schema installed",
+            // The daemon reads defaults in this state, so say so here rather
+            // than printing those defaults as if they were someone's choice.
+            None => "schema NOT installed - every value below is the built-in default",
+        }
+    );
+    let row = |key: &str, persisted: String, in_force: String, from: &str| {
+        println!("  {key:<15} {persisted:<12} -> {in_force:<24} [{from}]");
+    };
+    row(
+        "activation",
+        "(flag only)".into(),
+        format!("{:?}", resolved.activation),
+        source(args.activation.is_some(), false),
+    );
+    row(
+        "language",
+        settings
+            .language
+            .clone()
+            .unwrap_or_else(|| "(unset)".into()),
+        resolved
+            .language
+            .clone()
+            .unwrap_or_else(|| "(backend default)".into()),
+        source(args.language.is_some(), settings.language.is_some()),
+    );
+    let mode = resolved.mode.effective();
+    row(
+        "streaming-mode",
+        resolved.mode.choice.map_or("(unset)".into(), |choice| {
+            format!("{choice:?}").to_lowercase()
+        }),
+        format!(
+            "{}, preedit {}",
+            format!("{:?}", mode.mode).to_lowercase(),
+            resolved.preedit
+        ),
+        match (args.preedit, mode.source) {
+            (Some(_), _) => "flag",
+            (None, myna_core::ModeSource::User) => "settings",
+            (None, myna_core::ModeSource::Backend) => "backend",
+            (None, myna_core::ModeSource::Unknown) => "built-in",
+        },
+    );
+
+    println!("\nbackend");
+    match args.backend.as_ref().zip(provider) {
+        None => println!(
+            "  {:<15} (none - pass --socket or --backend-dir)",
+            "configured"
+        ),
+        Some((backend, provider)) => {
+            println!("  {:<15} {}", "configured", backend.describe());
+            match provider {
+                Ok(provider) => {
+                    if let Some(name) = &provider.snap_name {
+                        println!("  {:<15} {name}", "provider");
+                    }
+                    println!("  {:<15} {}", "resolves to", provider.socket.display());
+                    // The share names the snap, not the model it serves, so
+                    // ask the backend itself (T24 capabilities discovery).
+                    match caps.expect("asked whenever the provider resolved") {
+                        Ok(caps) => {
+                            if caps.models.is_empty() {
+                                println!("  {:<15} (backend did not report one)", "model");
+                            } else {
+                                println!("  {:<15} {}", "model", caps.models.join(", "));
+                            }
+                            println!(
+                                "  {:<15} {}",
+                                "streams",
+                                caps.streaming
+                                    .map_or("(backend did not say)".into(), |s| s.to_string())
+                            );
+                        }
+                        Err(e) => println!("  {:<15} unknown ({e})", "model"),
+                    }
+                }
+                Err(e) => {
+                    println!("  {:<15} NOT reachable: {e}", "resolves to");
+                    // The share is a bind mount inside the snap's namespace,
+                    // so an unconfined `--status` cannot see the socket a
+                    // perfectly healthy packaged daemon is using. Say that,
+                    // rather than reporting someone else's working setup as
+                    // broken.
+                    if std::env::var_os("SNAP").is_none()
+                        && backend.describe().starts_with("/var/snap/")
+                    {
+                        println!(
+                            "  {:<15} (a content share is only visible inside the snap - \
+                             `myna.status` reports what the daemon sees)",
+                            ""
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    println!("\ndaemon     {}", myna_desktop::dbus::BUS_NAME);
+    match rt.block_on(myna_desktop::dbus::status::read()) {
+        Ok(status) => {
+            println!("  {:<15} {}", "state", status.state);
+            println!(
+                "  {:<15} {}",
+                "status",
+                if status.status_message.is_empty() {
+                    "(none)".into()
+                } else {
+                    status.status_message
+                }
+            );
+        }
+        // Not running is the common case for someone debugging, and it is an
+        // answer, not a failure - so it reads as one and still exits 0.
+        Err(e) => println!("  {:<15} not reachable ({e})", "state"),
+    }
+    ExitCode::SUCCESS
+}
+
+/// Which plane a resolved value came from - the same order as [`Resolved`].
+fn source(flag: bool, user: bool) -> &'static str {
+    if flag {
+        "flag"
+    } else if user {
+        "settings"
+    } else {
+        "built-in"
+    }
+}
+
+/// Initialize both gettext domains this package owns.
+///
+/// `MYNA_DESKTOP_LOCALEDIR` (when set) is the only override; every other
+/// catalog is found by gettext itself through the default data dirs
+/// (`XDG_DATA_DIRS`, else `/usr/local/share` and `/usr/share`) — which is
+/// where the snap stages its `.mo` files, so no path logic belongs here.
+///
+/// Order matters: the orchestrator domain inits first and the desktop's last,
+/// so `textdomain()` ends on the desktop domain — what the plain `gettext()`
+/// calls in this crate expect. Each `init()` also sets the process locale
+/// from the environment.
+fn init_i18n() {
+    let mut orchestrator = gettextrs::TextDomain::new(myna_orchestrator::i18n::GETTEXT_DOMAIN);
+    let mut desktop = gettextrs::TextDomain::new("myna-desktop");
+    if let Ok(dir) = std::env::var("MYNA_DESKTOP_LOCALEDIR") {
+        if !dir.is_empty() {
+            orchestrator = orchestrator.push(dir.clone());
+            desktop = desktop.push(dir);
+        }
+    }
+    let _ = orchestrator.init();
+    let _ = desktop.init();
+}
+
+fn main() -> ExitCode {
+    init_i18n();
+
+    let args = match parse_args() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Non-daemon subcommands first (no IBus / server needed).
+    if let Some(accel) = &args.install_shortcut {
+        if let Some(refusal) = Platform::current().install_shortcut_refusal(&toggle_command()) {
+            eprintln!("{refusal}");
+            return ExitCode::FAILURE;
+        }
+        return install_shortcut(accel);
+    }
+    if args.status {
+        return print_status(&args);
+    }
+    if args.toggle {
+        let path = control_path(&args);
+        let rt = cli_runtime().expect("runtime");
+        return match rt.block_on(send_toggle(&path)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!(
+                    "cannot reach the myna-desktop daemon at {}: {e}",
+                    path.display()
+                );
+                for line in toggle_failure_hint(&args) {
+                    eprintln!("  {line}");
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if args.backend.is_none() {
+        eprintln!("--socket or --backend-dir is required to run the daemon\n\n{USAGE}");
+        return ExitCode::FAILURE;
+    }
+
+    // Everything resolvable, resolved once: flags, then the user's settings,
+    // then the built-in.
+    let settings = myna_core::Settings::load();
+    let resolved = Resolved::new(&args, &settings, None);
     myna_core::info_log!(
         "settings",
         "activation {:?}, language {}, preedit {} ({})",

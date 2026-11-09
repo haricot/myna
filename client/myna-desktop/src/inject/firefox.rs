@@ -50,7 +50,6 @@ struct Outbound {
 
 struct Armed {
     token: u64,
-    session_id: String,
     send: mpsc::Sender<Outbound>,
     revoke: watch::Sender<bool>,
     target: Option<watch::Sender<bool>>,
@@ -66,7 +65,7 @@ struct State {
 pub struct FirefoxHub(Arc<Mutex<State>>);
 
 impl FirefoxHub {
-    async fn register(&self, session_id: String, send: mpsc::Sender<Outbound>) -> (u64, watch::Receiver<bool>) {
+    async fn register(&self, send: mpsc::Sender<Outbound>) -> (u64, watch::Receiver<bool>) {
         let mut state = self.0.lock().await;
         if let Some(old) = state.armed.take() {
             let _ = old.revoke.send(true);
@@ -75,7 +74,7 @@ impl FirefoxHub {
         state.next_token += 1;
         let token = state.next_token;
         let (revoke, receiver) = watch::channel(false);
-        state.armed = Some(Armed { token, session_id, send, revoke, target: None });
+        state.armed = Some(Armed { token, send, revoke, target: None });
         (token, receiver)
     }
 
@@ -166,7 +165,7 @@ async fn handle_connection(hub: FirefoxHub, conn: UnixStream) -> io::Result<()> 
         .filter(|id| id.len() == 36 && id.is_ascii())
         .ok_or(io::ErrorKind::InvalidData)?.to_string();
     let (send, mut requests) = mpsc::channel::<Outbound>(8);
-    let (token, mut revoked) = hub.register(session_id.clone(), send).await;
+    let (token, mut revoked) = hub.register(send).await;
     let mut sequence: u64 = 0;
     loop {
         tokio::select! {
@@ -280,10 +279,10 @@ mod tests {
     async fn a_new_arm_revokes_the_previous_target() {
         let hub = FirefoxHub::default();
         let (tx, _rx) = mpsc::channel(2);
-        let _ = hub.register("first".into(), tx).await;
+        let _ = hub.register(tx).await;
         let mut first = hub.acquire().await.expect("armed");
         let (tx2, _rx2) = mpsc::channel(2);
-        let _ = hub.register("second".into(), tx2).await;
+        let _ = hub.register(tx2).await;
         assert!(matches!(first.commit("hello").await, Err(InjectError::FocusLost)));
     }
 
