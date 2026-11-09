@@ -89,11 +89,14 @@ class WebDriverInputTests(unittest.TestCase):
 
         client = ClientStub()
         FirefoxField(client, "session-test", "element-test").type_at(0, PREFIX)
-        self.assertEqual(client.calls[-1], (
-            "POST",
-            "/session/session-test/element/element-test/value",
-            {"text": PREFIX},
-        ))
+        self.assertEqual(
+            client.calls[-1],
+            (
+                "POST",
+                "/session/session-test/element/element-test/value",
+                {"text": PREFIX},
+            ),
+        )
         self.assertIn("setSelectionRange", client.calls[0][2]["script"])
         self.assertNotIn(".value=", client.calls[0][2]["script"])
 
@@ -102,21 +105,35 @@ class FirefoxAnchorScenarioTests(unittest.TestCase):
     def test_inserts_at_rebased_offset_with_independent_caret(self):
         field = ScratchField()
         browser = BrowserStub(field)
-        with patch("atspi_anchor_firefox._find_focused", return_value=(field, field, field)), patch(
-            "atspi_anchor_firefox._is_focused", return_value=True
+        with (
+            patch(
+                "atspi_anchor_firefox._find_focused",
+                return_value=(field, field, field),
+            ),
+            patch("atspi_anchor_firefox._is_focused", return_value=True),
         ):
             result = run_anchor_scenario(browser, object(), timeout=0.5)
 
         self.assertEqual(result.original_anchor, ANCHOR_OFFSET)
         self.assertEqual(result.rebased_anchor, ANCHOR_OFFSET + len(PREFIX))
-        self.assertEqual(field.value, PREFIX + INITIAL_TEXT[:ANCHOR_OFFSET] + INSERTION + INITIAL_TEXT[ANCHOR_OFFSET:])
+        self.assertEqual(
+            field.value,
+            PREFIX
+            + INITIAL_TEXT[:ANCHOR_OFFSET]
+            + INSERTION
+            + INITIAL_TEXT[ANCHOR_OFFSET:],
+        )
         self.assertEqual(field.caret, len(PREFIX))
 
     def test_rejects_write_at_editing_caret(self):
         field = ScratchField(insert_at_caret=True)
         browser = BrowserStub(field)
-        with patch("atspi_anchor_firefox._find_focused", return_value=(field, field, field)), patch(
-            "atspi_anchor_firefox._is_focused", return_value=True
+        with (
+            patch(
+                "atspi_anchor_firefox._find_focused",
+                return_value=(field, field, field),
+            ),
+            patch("atspi_anchor_firefox._is_focused", return_value=True),
         ):
             with self.assertRaisesRegex(ProbeError, "not at the anchor"):
                 run_anchor_scenario(browser, object(), timeout=0.5)
@@ -131,8 +148,12 @@ class FirefoxAnchorScenarioTests(unittest.TestCase):
             field.focused = False
 
         browser.type_at = lose_focus
-        with patch("atspi_anchor_firefox._find_focused", return_value=(field, field, field)), patch(
-            "atspi_anchor_firefox._is_focused", return_value=True
+        with (
+            patch(
+                "atspi_anchor_firefox._find_focused",
+                return_value=(field, field, field),
+            ),
+            patch("atspi_anchor_firefox._is_focused", return_value=True),
         ):
             with self.assertRaisesRegex(ProbeError, "focus"):
                 run_anchor_scenario(browser, object(), timeout=0.01)
