@@ -3,8 +3,10 @@
 This is an **unreleased, non-production experiment** for a Firefox-specific text
 insertion target. It does not change Myna's existing IBus injector, does not use
 AT-SPI. A Rust Native Messaging host and an opt-in `myna-desktop` socket
-adapter now exist in source, but **they are not yet validated against a real
-Firefox/Wayland session** and must not be enabled as a production default.
+adapter now exist in source, but **the textarea path has now been manually validated in Firefox on GNOME/Wayland**:
+arming returned `ok: true`, dictation inserted into the selected text field,
+and the anchor survived the field losing focus. This is not yet a complete
+production compatibility or security gate.
 
 Firefox WebExtension activation is deliberately explicit: click the extension
 button (or a user-assigned extension shortcut) with a normal writable `input` or
@@ -23,13 +25,19 @@ their own transaction adapters). It fails closed when a user edit overlaps the
 anchor or an untracked edit is ambiguous. Myna segments use a session ID and an
 ordered `sequence`; late or duplicate segments are refused.
 
+Firefox `runtime.onMessage` listeners return a Promise for arm, stop and
+commit responses; a plain object is silently delivered as `undefined` by
+`tabs.sendMessage`, causing a misleading `ERR` / `No writable text field`
+badge despite a valid focused textarea. The regression suite covers this
+Firefox messaging contract as well as field edits and anchor safety.
+
 The `TextAnchor` algorithm is separated so it can be tested without a desktop:
 
 ```sh
 node --test extensions/myna-firefox/test/*.test.cjs
 ```
 
-## Native bridge, for a disposable Firefox Nightly test profile only
+## Native bridge, for a disposable Firefox test profile only
 
 From the repository root, after the Rust client build succeeds:
 
@@ -63,7 +71,7 @@ must be inserted at that anchor even if you have moved the caret. Click the
 extension button again to disarm. Use a disposable Firefox profile with no
 signed-in accounts for the first native tests.
 
-**Do not merge this prototype** until the Firefox 162/Wayland hardware gate,
+**Do not merge this prototype** until the remaining Firefox/Wayland hardware gate,
 Rust tests, full repository checks, packaging and confinement review pass.
 
 ## Local protocol
@@ -95,3 +103,19 @@ No test should launch a private D-Bus accessibility bus outside the repository's
 verify DOM selection preservation, input event delivery, concurrent edits,
 target closure and navigation, as well as compatibility with controlled web
 editors before the production Myna injector is changed.
+
+## Unified GNOME dictation shortcut (design boundary)
+
+The currently validated Firefox action **arms or disarms** the field; it does
+not start the microphone. The user's existing GNOME global shortcut activates
+Myna's control socket / D-Bus toggle. Do not bind the same accelerator to
+both GNOME and Firefox: GNOME may consume it before Firefox receives it.
+
+A fully automatic global toggle needs the daemon to request an anchor from
+the Firefox extension *before* acquiring the text target and starting audio.
+The existing `activeTab` permission is granted by a Firefox user gesture;
+a GNOME keyboard shortcut does not grant it. The integration must retain the
+narrow permission policy, obtaining explicit per-site permission or an
+existing user-granted tab lease instead of silently broadening access to
+all websites. Until the bidirectional handshake and corresponding tests are
+implemented, use the Firefox arm action followed by the normal Myna shortcut.
