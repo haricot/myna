@@ -63,97 +63,112 @@ function createHarness(field) {
   return { field, send: (msg) => listener(msg) };
 }
 
-test("captures a textarea and commits after user moves caret and edits before anchor", () => {
+test("captures a textarea and commits after user moves caret and edits before anchor", async () => {
   const h = createHarness(new Textarea("abcdef", 4));
-  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, true);
   h.field.selectionStart = 1;
   h.field.selectionEnd = 1;
   h.field.type("X");
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "YY" }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "YY" })).ok, true);
   assert.equal(h.field.value, "aXbcdYYef");
   assert.equal(h.field.selectionStart, 2);
   assert.equal(h.field.selectionEnd, 2);
 });
 
-test("refuses a protected input and never arms it", () => {
+test("refuses a protected input and never arms it", async () => {
   const h = createHarness(new Input("secret", 3, "password"));
-  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "a" }).ok, false);
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "a", sequence: 0, text: "x" }).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "a" })).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "a", sequence: 0, text: "x" })).ok, false);
   assert.equal(h.field.value, "secret");
 });
 
-test("refuses stale, duplicate, or out-of-order segments", () => {
+test("refuses stale, duplicate, or out-of-order segments", async () => {
   const h = createHarness(new Textarea("abcdef", 4));
-  h.send({ type: "myna.anchor.arm", session_id: "new" });
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "old", sequence: 0, text: "x" }).ok, false);
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "new", sequence: 1, text: "x" }).ok, false);
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "new", sequence: 0, text: "X" }).ok, true);
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "new", sequence: 0, text: "X" }).ok, false);
+  await h.send({ type: "myna.anchor.arm", session_id: "new" });
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "old", sequence: 0, text: "x" })).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "new", sequence: 1, text: "x" })).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "new", sequence: 0, text: "X" })).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "new", sequence: 0, text: "X" })).ok, false);
 });
 
-test("revokes the anchor when another edit crosses it", () => {
+test("revokes the anchor when another edit crosses it", async () => {
   const h = createHarness(new Textarea("abcdef", 3));
-  h.send({ type: "myna.anchor.arm", session_id: "one" });
+  await h.send({ type: "myna.anchor.arm", session_id: "one" });
   h.field.selectionStart = 1;
   h.field.selectionEnd = 5;
   h.field.type("X");
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "YY" }).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "YY" })).ok, false);
 });
 
-test("rejects writes after field has been removed", () => {
+test("rejects writes after field has been removed", async () => {
   const h = createHarness(new Textarea("abcdef", 3));
-  h.send({ type: "myna.anchor.arm", session_id: "one" });
+  await h.send({ type: "myna.anchor.arm", session_id: "one" });
   h.field.isConnected = false;
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" }).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" })).ok, false);
 });
 
-test("consecutive dictated repeats keep a live anchor without double rebasing", () => {
+test("consecutive dictated repeats keep a live anchor without double rebasing", async () => {
   const h = createHarness(new Textarea("aaaa", 2));
-  h.send({ type: "myna.anchor.arm", session_id: "one" });
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "a" }).ok, true);
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 1, text: "a" }).ok, true);
+  await h.send({ type: "myna.anchor.arm", session_id: "one" });
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "a" })).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 1, text: "a" })).ok, true);
   assert.equal(h.field.value, "aaaaaa");
 });
 
-test("a moved selection stays intact when dictation commits at its independent anchor", () => {
+test("a moved selection stays intact when dictation commits at its independent anchor", async () => {
   const h = createHarness(new Textarea("bonjour monde", 8));
-  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, true);
   h.field.selectionStart = 0;
   h.field.selectionEnd = 7;
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "cher " }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "cher " })).ok, true);
   assert.equal(h.field.value, "bonjour cher monde");
   assert.equal(h.field.selectionStart, 0);
   assert.equal(h.field.selectionEnd, 7);
 });
 
-test("independent user edits remain stable across multiple dictation commits", () => {
+test("independent user edits remain stable across multiple dictation commits", async () => {
   const h = createHarness(new Textarea("abcdEFGH", 4));
-  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, true);
   h.field.selectionStart = 1;
   h.field.selectionEnd = 1;
   h.field.type("X");
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: " bon" }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: " bon" })).ok, true);
   h.field.selectionStart = h.field.value.length;
   h.field.selectionEnd = h.field.value.length;
   h.field.type("!");
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 1, text: "jour" }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 1, text: "jour" })).ok, true);
   assert.equal(h.field.value, "aXbcd bonjourEFGH!");
   assert.equal(h.field.selectionStart, h.field.value.length);
 });
 
-test("contenteditable and non-collapsed selections are deliberately unsupported", () => {
+test("contenteditable and non-collapsed selections are deliberately unsupported", async () => {
   const h = createHarness({ isContentEditable: true, isConnected: true });
-  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, false);
   const field = new Textarea("abcdefgh", 2);
   field.selectionEnd = 6;
   const selected = createHarness(field);
-  assert.equal(selected.send({ type: "myna.anchor.arm", session_id: "one" }).ok, false);
+  assert.equal((await selected.send({ type: "myna.anchor.arm", session_id: "one" })).ok, false);
 });
 
-test("a field that becomes readonly fails closed", () => {
+test("a field that becomes readonly fails closed", async () => {
   const h = createHarness(new Textarea("abcdef", 3));
-  assert.equal(h.send({ type: "myna.anchor.arm", session_id: "one" }).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, true);
   h.field.readOnly = true;
-  assert.equal(h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" }).ok, false);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" })).ok, false);
   assert.equal(h.field.value, "abcdef");
+});
+
+test("Firefox runtime replies with Promises and ignores unrelated messages", async () => {
+  const h = createHarness(new Textarea("bonjour", 3));
+  const arm = h.send({ type: "myna.anchor.arm", session_id: "one" });
+  assert.equal(typeof arm.then, "function");
+  assert.equal((await arm).ok, true);
+  const commit = h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" });
+  assert.equal(typeof commit.then, "function");
+  assert.equal((await commit).ok, true);
+  const stop = h.send({ type: "myna.anchor.stop" });
+  assert.equal(typeof stop.then, "function");
+  assert.equal((await stop).ok, true);
+  assert.equal(h.send({ type: "unrelated.message" }), false);
+  assert.equal(h.send(null), false);
 });
