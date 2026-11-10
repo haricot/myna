@@ -22,7 +22,9 @@ the daemon requests an anchor and waits at most 750 ms for the browser's
 `arm` + `prepare-result` before starting capture. Firefox arms automatically
 only when foreground and when the user previously granted permission to that
 exact HTTP(S) site through a Firefox gesture; the OS shortcut cannot grant
-`activeTab`. Without a ready port or successful preparation, the existing IBus
+`activeTab`. An already manually pinned Firefox target is acknowledged without
+recapturing its caret or requiring Firefox to regain focus. Without a ready
+port or successful preparation, the existing IBus
 backend remains the fallback. The extension's own optional arm key is not
 discovered by Myna, and Myna's GNOME key is never duplicated in the browser.
 

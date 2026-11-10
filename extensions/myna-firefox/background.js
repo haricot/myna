@@ -70,7 +70,9 @@ async function arm(tab, automatic = false) {
     await browser.scripting.executeScript({ target: { tabId: tab.id }, files: ["anchor.js", "content.js"] });
     const result = await browser.tabs.sendMessage(tab.id, { type: "myna.anchor.arm", session_id: sessionId });
     if (!result?.ok) throw new Error("No writable text field");
-    active = { tabId: tab.id, sessionId };
+    // An explicit Firefox gesture pins the caret. Subsequent GNOME toggles
+    // must not silently move it while the user edits another location.
+    active = { tabId: tab.id, sessionId, pinned: !automatic };
     if (!send({ type: "arm", protocol: 1, session_id: sessionId })) throw new Error("Native host disconnected");
     await badge(tab.id, "ARM", "#367c55");
     return true;
@@ -86,6 +88,9 @@ async function arm(tab, automatic = false) {
 
 async function prepare() {
   try {
+    // The daemon already holds this manual arm token. Acknowledge the lease
+    // without recapturing the cursor, even when Firefox lost focus.
+    if (active?.pinned) return true;
     const window = await browser.windows.getLastFocused();
     if (!window?.focused || window.type !== "normal") return false;
     const [tab] = await browser.tabs.query({ active: true, windowId: window.id });

@@ -63,13 +63,35 @@ test("a Myna prepare arms the focused, already-authorized Firefox field", async 
   assert.equal(h.outbound.at(-1).ok, true);
 });
 
-test("each new Myna activation refreshes a prior anchor without disarming its handshake", async () => {
+test("a manually pinned anchor is not replaced by a Myna activation", async () => {
   const h = harness();
   await h.events.clicked(h.tabs[0]);
   h.events.nativeMessage({ type: "prepare", protocol: 1 });
   await flush();
-  assert.deepEqual(h.outbound.map((m) => m.type), ["ready", "arm", "arm", "prepare-result"]);
+  h.events.nativeMessage({ type: "prepare", protocol: 1 });
+  await flush();
+  assert.deepEqual(h.outbound.map((m) => m.type), ["ready", "arm", "prepare-result", "prepare-result"]);
+  assert.equal(h.injections.length, 1);
   assert.equal(h.outbound.at(-1).ok, true);
+});
+
+test("a manually pinned anchor survives Firefox losing foreground focus", async () => {
+  const h = harness({ focused: false });
+  await h.events.clicked(h.tabs[0]);
+  h.events.nativeMessage({ type: "prepare", protocol: 1 });
+  await flush();
+  assert.deepEqual(h.outbound.map((m) => m.type), ["ready", "arm", "prepare-result"]);
+  assert.equal(h.outbound.at(-1).ok, true);
+});
+
+test("a new GNOME activation can refresh an automatically captured anchor", async () => {
+  const h = harness();
+  h.events.nativeMessage({ type: "prepare", protocol: 1 });
+  await flush();
+  h.events.nativeMessage({ type: "prepare", protocol: 1 });
+  await flush();
+  assert.deepEqual(h.outbound.map((m) => m.type), ["ready", "arm", "prepare-result", "arm", "prepare-result"]);
+  assert.equal(h.injections.length, 2);
 });
 
 test("a prepared session routes transcription only to its matching session", async () => {

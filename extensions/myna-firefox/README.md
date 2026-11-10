@@ -23,6 +23,10 @@ The native host name is `myna.firefox_anchor`. No system-wide service, port,
 AT-SPI permission, or microphone privilege is required by the extension.
 The extension maintains a native port while available and reconnects after a
 temporary loss of the opt-in daemon, without touching the page on its own.
+Clicking the Firefox action (or its optional Firefox shortcut) explicitly pins
+the selected caret: subsequent GNOME activations must not recapture it while
+the user edits elsewhere. Click again to disarm; navigation or an invalidated
+field also revokes the anchor.
 
 The content script intentionally supports ordinary text inputs only. It rejects
 passwords, payment and one-time-code autocomplete fields, readonly/disabled
@@ -86,7 +90,7 @@ Firefox starts a Native Messaging host via `browser.runtime.connectNative` and
 sends `{ "type":"ready", "protocol":1 }` through a dedicated
 `myna-firefox-host` process. This process validates bounded messages and relays
 them over the private Unix socket. When Myna's global shortcut starts a session,
-the daemon tries to refresh the current Firefox caret by sending
+the daemon asks Firefox to prepare its injection target by sending
 `{ "type":"prepare", "protocol":1 }`. If Firefox is foreground and the
 current site is explicitly authorized, the extension captures the caret,
 sends `{ "type":"arm", "protocol":1, "session_id":"..." }` and replies
@@ -129,3 +133,8 @@ denied sites, Myna keeps its original IBus injector. Hermetic JavaScript tests
 cover browser permission and focus behavior; the native protocol needs its
 GNOME/Firefox/Wayland real-device timing and confinement acceptance gate before
 being enabled by default.
+
+A manually pinned field is acknowledged using its existing arm token, even
+when Firefox is no longer foreground; the caret is not recaptured. An
+automatically captured caret can still refresh on a later GNOME activation
+when Firefox is foreground.
