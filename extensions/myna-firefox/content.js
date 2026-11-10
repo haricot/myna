@@ -100,14 +100,18 @@
     return { ok: true, sequence: message.sequence };
   }
 
+  // Firefox's runtime.onMessage only delivers a response when the listener
+  // returns a Promise or calls sendResponse; returning a plain object results
+  // in tabs.sendMessage resolving to undefined in the background script.
   browser.runtime.onMessage.addListener((message) => {
-    if (!message || typeof message.type !== "string") return;
-    if (message.type === "myna.anchor.arm") return arm(message.session_id);
+    if (!message || typeof message.type !== "string") return false;
+    if (message.type === "myna.anchor.arm") return Promise.resolve(arm(message.session_id));
     if (message.type === "myna.anchor.stop") {
       end();
-      return { ok: true };
+      return Promise.resolve({ ok: true });
     }
-    if (message.type === "myna.anchor.commit") return insert(message);
+    if (message.type === "myna.anchor.commit") return Promise.resolve(insert(message));
+    return false;
   });
   addEventListener("pagehide", end);
 })();
