@@ -58,7 +58,7 @@ function sitePattern(urlString) {
   } catch (_) { return null; }
 }
 
-async function arm(tab) {
+async function arm(tab, automatic = false) {
   if (!Number.isInteger(tab?.id)) return false;
   connect();
   if (!port) return false;
@@ -66,7 +66,7 @@ async function arm(tab) {
   try {
     // Revoke an older session *before* installing the new DOM anchor: a late
     // "stop" message must never delete the newly captured caret.
-    if (active) await stop();
+    if (active) await stop(!automatic);
     await browser.scripting.executeScript({ target: { tabId: tab.id }, files: ["anchor.js", "content.js"] });
     const result = await browser.tabs.sendMessage(tab.id, { type: "myna.anchor.arm", session_id: sessionId });
     if (!result?.ok) throw new Error("No writable text field");
@@ -76,6 +76,9 @@ async function arm(tab) {
     return true;
   } catch (_) {
     await stop();
+    // The automatic path must not reuse a stale target when the user moved
+    // to an unsafe or non-editable field on the same site.
+    if (automatic) send({ type: "disarm", protocol: 1 });
     await badge(tab.id, "ERR", "#b33838").catch(() => {});
     return false;
   }
@@ -87,8 +90,13 @@ async function prepare() {
     if (!window?.focused || window.type !== "normal") return false;
     const [tab] = await browser.tabs.query({ active: true, windowId: window.id });
     const origin = sitePattern(tab?.url);
-    if (!origin || !await browser.permissions.contains({ origins: [origin] })) return false;
-    return await arm(tab);
+    if (!origin || !await browser.permissions.contains({ origins: [origin] })) {
+      // Firefox is foreground but this page is not authorized. Do not leak
+      // the preceding tab's anchor into a new dictation session.
+      await stop();
+      return false;
+    }
+    return await arm(tab, true);
   } catch (_) { return false; }
 }
 

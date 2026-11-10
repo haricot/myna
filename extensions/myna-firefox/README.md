@@ -85,8 +85,8 @@ Rust tests, full repository checks, packaging and confinement review pass.
 Firefox starts a Native Messaging host via `browser.runtime.connectNative` and
 sends `{ "type":"ready", "protocol":1 }` through a dedicated
 `myna-firefox-host` process. This process validates bounded messages and relays
-them over the private Unix socket. When Myna's global shortcut starts a session
-without an armed Firefox field, the daemon sends
+them over the private Unix socket. When Myna's global shortcut starts a session,
+the daemon tries to refresh the current Firefox caret by sending
 `{ "type":"prepare", "protocol":1 }`. If Firefox is foreground and the
 current site is explicitly authorized, the extension captures the caret,
 sends `{ "type":"arm", "protocol":1, "session_id":"..." }` and replies

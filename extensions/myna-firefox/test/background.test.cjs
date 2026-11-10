@@ -63,6 +63,15 @@ test("a Myna prepare arms the focused, already-authorized Firefox field", async 
   assert.equal(h.outbound.at(-1).ok, true);
 });
 
+test("each new Myna activation refreshes a prior anchor without disarming its handshake", async () => {
+  const h = harness();
+  await h.events.clicked(h.tabs[0]);
+  h.events.nativeMessage({ type: "prepare", protocol: 1 });
+  await flush();
+  assert.deepEqual(h.outbound.map((m) => m.type), ["ready", "arm", "arm", "prepare-result"]);
+  assert.equal(h.outbound.at(-1).ok, true);
+});
+
 test("a prepared session routes transcription only to its matching session", async () => {
   const h = harness();
   h.events.nativeMessage({ type: "prepare", protocol: 1 });

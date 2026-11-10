@@ -392,10 +392,14 @@ impl<I> FirefoxOrIbusInjector<I> {
 #[async_trait]
 impl<I: Injector> Injector for FirefoxOrIbusInjector<I> {
     async fn acquire(&mut self) -> Result<Box<dyn Target>, InjectError> {
-        if let Some(target) = self.hub.acquire().await { return Ok(Box::new(target)); }
+        // A new GNOME activation renews the Firefox anchor at the caret's
+        // *current* location when Firefox is foreground and authorized.
         if self.hub.prepare().await {
             if let Some(target) = self.hub.acquire().await { return Ok(Box::new(target)); }
         }
+        // Preserve the manually armed lease if the browser is no longer
+        // foreground (the focus-independent dictation use case).
+        if let Some(target) = self.hub.acquire().await { return Ok(Box::new(target)); }
         self.fallback.acquire().await
     }
     fn capabilities(&self) -> TextInputCapabilities { self.fallback.capabilities() }
