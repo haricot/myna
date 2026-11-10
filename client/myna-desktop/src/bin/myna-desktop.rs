@@ -51,6 +51,7 @@ use myna_desktop::indicator::dynamic::DynamicIndicator;
 use myna_desktop::indicator::notify::NotifyIndicator;
 use myna_desktop::indicator::readiness::{Readiness, ReadinessTee};
 use myna_desktop::inject::lazy::{IbusConnect, LazyInjector};
+use myna_desktop::inject::firefox::{socket_path as firefox_socket_path, FirefoxHub, FirefoxOrIbusInjector};
 use myna_desktop::inject::Injector as _;
 use myna_desktop::platform::Platform;
 use myna_desktop::shortcut::control::{default_socket_path, listen, send_toggle, ControlTrigger};
@@ -705,7 +706,24 @@ async fn run_controller(
     let _settings_watch = live.follow(&args, pump_bus.clone());
     let restart = Arc::new(tokio::sync::Notify::new());
 
-    let injector = LazyInjector::new(IbusConnect);
+    let firefox = FirefoxHub::default();
+    // Explicit, development-only opt-in. Snap confinement can isolate the
+    // daemon's XDG_RUNTIME_DIR, so don't claim packaged Firefox support until
+    // the confinement path has been measured on the user's actual machine.
+    if std::env::var("MYNA_FIREFOX_ANCHOR").as_deref() == Ok("1") {
+        match firefox_socket_path() {
+            Ok(path) => {
+                let hub = firefox.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = hub.serve(path).await {
+                        eprintln!("myna-desktop: Firefox anchor unavailable: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("myna-desktop: Firefox anchor disabled: {err}"),
+        }
+    }
+    let injector = FirefoxOrIbusInjector::new(firefox, LazyInjector::new(IbusConnect));
     // Every poke reaches the text input backend at once, a held key's repeats
     // too: they keep its grab's blip open while the controller is busy.
     trigger.hear(injector.activation());

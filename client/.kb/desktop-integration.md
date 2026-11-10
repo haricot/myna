@@ -15,6 +15,29 @@ Read the top-level `.kb/agents.md` file before continuing below.
 
 The key is a custom shortcut Myna Settings writes: GNOME media-keys, Xfce xfconf or a kglobalaccel command shortcut on Plasma (`myna-config/docs/onboarding.md`, `.kb/platform-layer.md`). The GlobalShortcuts portal was the packaged activation until 2026-10 and was removed with hold-to-talk: stacked and duplicate consent dialogs, consent and retry races, app id drift (`myna_myna` versus `.`), grants surviving `snap remove --purge`, grabs needing a re-login, and no GlobalShortcuts at all on Noble's portal. `Activation` is still published, always `control`, for Myna Settings releases that read it.
 
+The experimental opt-in Firefox text injector is an additional target backend,
+not a second global shortcut. A Firefox extension's background script maintains
+a validated Native Messaging connection to the daemon; at `Injector::acquire`,
+the daemon requests an anchor and waits at most 750 ms for the browser's
+`arm` + `prepare-result` before starting capture. Firefox arms automatically
+only when foreground and when the user previously granted permission to that
+exact HTTP(S) site through a Firefox gesture; the OS shortcut cannot grant
+`activeTab`. An already manually pinned Firefox target is acknowledged without
+recapturing its caret or requiring Firefox to regain focus. Without a ready
+port or successful preparation, the existing IBus
+backend remains the fallback. The extension's own optional arm key is not
+discovered by Myna, and Myna's GNOME key is never duplicated in the browser.
+In a plain text field, a focused collapsed caret that meets the Firefox anchor
+follows committed dictation text, while an independently moved caret or
+selection is preserved; a remembered caret in an unfocused field never follows.
+The optional Firefox content script also has a bounded `contenteditable` DOM
+adapter for native paragraph/inline-rich editing hosts. It maps their text,
+block separators and `<br>` to UTF-16 offsets, inserts via a DOM Range, and
+preserves an independent selection. It refuses unsafe embedded controls and
+ambiguous edits. Framework-controlled rich editors need specific transaction
+adapters and an actual Firefox acceptance gate: direct DOM edits with a
+synthetic `input` event are not guaranteed to update editor state or undo.
+
 The controller acquires the target before capture, refuses known secure fields, starts capture on activation, and finalizes on release or focus loss. Text buffered when focus is lost is discarded rather than sent to a different target. One select loop covers the whole utterance, including the events still queued after the session future finishes, so a focus loss is always seen before the next queued segment is written; the trigger and stats arms shut off once the session ends, because an edge arriving then belongs to the next utterance. A write the target refuses because its lease is gone ends the utterance as well: nothing further is attempted, and because that text reached no field, the completion reports the loss rather than a clean insertion, whatever the transcript holds. An empty transcript after a focus loss reads the same way rather than as silence.
 
 A capture fault mid-utterance does not end the utterance at the controller either. The orchestrator finishes the session with the audio it had already accepted and raises the device afterwards, so the controller sees `CaptureLost` while the transcript is still coming: it moves the indicator to finishing, since capture is over even though the utterance is not, keeps the message, inserts the committed text exactly as usual, and then shows that failure where the completion notice would go. The HUD reads recording, finishing, error, and never shows the hidden or "No speech detected" completion on the way, which would claim a clean dictation a dead microphone did not give. A fault with nothing captured has no text to wait for and stays an immediate error.

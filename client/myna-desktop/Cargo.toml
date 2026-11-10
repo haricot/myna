@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "myna-desktop"
 path = "src/bin/myna-desktop.rs"
 
+[[bin]]
+name = "myna-firefox-host"
+path = "src/bin/myna-firefox-host.rs"
+
 [features]
 default = []
 
@@ -27,6 +31,8 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+native_messaging = { version = "0.3", default-features = false, features = ["install"] }
 # D-Bus: the IBus engine object and the served dictation interface.
 zbus = "5"
 # Publisher-owned D-Bus status labels use the shared `myna` gettext domain.
