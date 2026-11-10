@@ -76,8 +76,13 @@
       try {
         const originalStart = el.selectionStart;
         const originalEnd = el.selectionEnd;
+        // When the user's live caret coincides with the dictation anchor,
+        // they are editing one stream: advance it as normal typing would.
+        // A moved caret or selection remains independent of the anchor.
+        const followCaret = document.activeElement === el && originalStart === at && originalEnd === at;
         el.setRangeText(text, at, at, "preserve");
         if (el.value !== session.anchor.value.slice(0, at) + text + session.anchor.value.slice(at)) return false;
+        if (followCaret) el.setSelectionRange(at + text.length, at + text.length);
         // Notify page frameworks, without claiming universal compatibility.
         session.sending = true;
         try {
@@ -85,8 +90,9 @@
         } finally {
           session.sending = false;
         }
-        // "preserve" must keep a caret before the insertion from moving.
-        if (originalEnd <= at && (el.selectionStart !== originalStart || el.selectionEnd !== originalEnd)) return false;
+        // Outside the co-located caret case, preserve an independent caret.
+        if (followCaret && (el.selectionStart !== at + text.length || el.selectionEnd !== at + text.length)) return false;
+        if (!followCaret && originalEnd <= at && (el.selectionStart !== originalStart || el.selectionEnd !== originalEnd)) return false;
         return true;
       } catch (_) {
         return false;

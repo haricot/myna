@@ -27,6 +27,9 @@ recapturing its caret or requiring Firefox to regain focus. Without a ready
 port or successful preparation, the existing IBus
 backend remains the fallback. The extension's own optional arm key is not
 discovered by Myna, and Myna's GNOME key is never duplicated in the browser.
+In a plain text field, a focused collapsed caret that meets the Firefox anchor
+follows committed dictation text, while an independently moved caret or
+selection is preserved; a remembered caret in an unfocused field never follows.
 
 The controller acquires the target before capture, refuses known secure fields, starts capture on activation, and finalizes on release or focus loss. Text buffered when focus is lost is discarded rather than sent to a different target. One select loop covers the whole utterance, including the events still queued after the session future finishes, so a focus loss is always seen before the next queued segment is written; the trigger and stats arms shut off once the session ends, because an edge arriving then belongs to the next utterance. A write the target refuses because its lease is gone ends the utterance as well: nothing further is attempted, and because that text reached no field, the completion reports the loss rather than a clean insertion, whatever the transcript holds. An empty transcript after a focus loss reads the same way rather than as silence.
 

@@ -34,6 +34,10 @@ class Field {
     if (this.selectionStart > end) this.selectionStart += delta;
     if (this.selectionEnd > end) this.selectionEnd += delta;
   }
+  setSelectionRange(start, end) {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+  }
   type(text) {
     this.dispatchEvent({ type: "beforeinput", inputType: "insertText", data: text, isComposing: false });
     this.setRangeText(text, this.selectionStart, this.selectionEnd, "preserve");
@@ -49,9 +53,10 @@ class FakeInputEvent { constructor(type, detail) { this.type = type; Object.assi
 function createHarness(field) {
   let listener;
   const browser = { runtime: { onMessage: { addListener(fn) { listener = fn; } } } };
+  const document = { activeElement: field };
   const context = vm.createContext({
     browser,
-    document: { activeElement: field },
+    document,
     HTMLTextAreaElement: Textarea,
     HTMLInputElement: Input,
     InputEvent: FakeInputEvent,
@@ -60,7 +65,7 @@ function createHarness(field) {
   });
   vm.runInContext(fs.readFileSync(path.join(root, "anchor.js"), "utf8"), context);
   vm.runInContext(fs.readFileSync(path.join(root, "content.js"), "utf8"), context);
-  return { field, send: (msg) => listener(msg) };
+  return { field, document, send: (msg) => listener(msg) };
 }
 
 test("captures a textarea and commits after user moves caret and edits before anchor", async () => {
@@ -73,6 +78,41 @@ test("captures a textarea and commits after user moves caret and edits before an
   assert.equal(h.field.value, "aXbcdYYef");
   assert.equal(h.field.selectionStart, 2);
   assert.equal(h.field.selectionEnd, 2);
+});
+
+test("when the live caret meets the anchor, dictated text advances it like normal typing", async () => {
+  const h = createHarness(new Textarea("abcXYZ", 3));
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, true);
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "bon " })).ok, true);
+  assert.equal(h.field.value, "abcbon XYZ");
+  assert.equal(h.field.selectionStart, 7);
+  assert.equal(h.field.selectionEnd, 7);
+  h.field.type("jour");
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 1, text: "!" })).ok, true);
+  assert.equal(h.field.value, "abcbon jour!XYZ");
+  assert.equal(h.field.selectionStart, 12);
+  assert.equal(h.field.selectionEnd, 12);
+});
+
+test("a selection starting at the anchor remains selected during dictation", async () => {
+  const h = createHarness(new Textarea("abcdef", 3));
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, true);
+  h.field.selectionStart = 3;
+  h.field.selectionEnd = 5;
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" })).ok, true);
+  assert.equal(h.field.value, "abcXdef");
+  assert.equal(h.field.selectionStart, 3);
+  assert.equal(h.field.selectionEnd, 6);
+});
+
+test("an old caret at the anchor is not moved after Firefox field loses focus", async () => {
+  const h = createHarness(new Textarea("abcdef", 3));
+  assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, true);
+  h.document.activeElement = null;
+  assert.equal((await h.send({ type: "myna.anchor.commit", session_id: "one", sequence: 0, text: "X" })).ok, true);
+  assert.equal(h.field.value, "abcXdef");
+  assert.equal(h.field.selectionStart, 3);
+  assert.equal(h.field.selectionEnd, 3);
 });
 
 test("refuses a protected input and never arms it", async () => {

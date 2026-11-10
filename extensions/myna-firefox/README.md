@@ -28,6 +28,12 @@ the selected caret: subsequent GNOME activations must not recapture it while
 the user edits elsewhere. Click again to disarm; navigation or an invalidated
 field also revokes the anchor.
 
+When the user's focused, collapsed caret happens to coincide with the pinned
+anchor, dictation advances that visible caret just like ordinary typing. Once
+the user moves the caret or selects text elsewhere, dictated insertions keep
+the new caret or selection independent. An unfocused field's remembered
+selection is not moved just because it happens to equal the anchor offset.
+
 The content script intentionally supports ordinary text inputs only. It rejects
 passwords, payment and one-time-code autocomplete fields, readonly/disabled
 fields, non-collapsed selections, and rich `contenteditable` editors (which need
