@@ -23,7 +23,11 @@
   }
 
   function onBeforeInput(event) {
-    if (!session || session.sending || event.target !== session.element) return;
+    if (!session || session.sending || session.rich?.sending || event.target !== session.element) return;
+    if (session.rich) {
+      session.rich.beforeInput(event);
+      return;
+    }
     const el = session.element;
     const start = el.selectionStart;
     const end = el.selectionEnd;
@@ -38,7 +42,11 @@
   }
 
   function onInput(event) {
-    if (!session || session.sending || event.target !== session.element) return;
+    if (!session || session.sending || session.rich?.sending || event.target !== session.element) return;
+    if (session.rich) {
+      if (!session.rich.observe(true)) end();
+      return;
+    }
     const next = session.element.value;
     const pending = session.pending;
     session.pending = null;
@@ -48,6 +56,20 @@
   function arm(sessionId) {
     end();
     const element = document.activeElement;
+    const richHost = !safeField(element) && typeof globalThis.MynaRichAnchor === "function" &&
+      typeof globalThis.MynaRichEditingHost === "function"
+      ? globalThis.MynaRichEditingHost(element) : null;
+    if (richHost) {
+      try {
+        const rich = new globalThis.MynaRichAnchor(richHost);
+        session = { id: sessionId, element: richHost, rich, nextSequence: 0, sending: false };
+        richHost.addEventListener("beforeinput", onBeforeInput, true);
+        richHost.addEventListener("input", onInput, true);
+        return { ok: true };
+      } catch (_) {
+        return { ok: false, error: "Select a supported rich editor and a collapsed caret" };
+      }
+    }
     if (!safeField(element) || !Number.isInteger(element.selectionStart) || element.selectionStart !== element.selectionEnd) {
       return { ok: false, error: "Select one writable text input and position a collapsed caret" };
     }
@@ -62,9 +84,18 @@
     if (!session || message.session_id !== session.id || message.sequence !== session.nextSequence) {
       return { ok: false, error: "session-or-sequence-mismatch" };
     }
-    if (typeof message.text !== "string" || message.text.length > 4096 || !safeField(session.element)) {
+    if (typeof message.text !== "string" || message.text.length > 4096 ||
+        (session.rich ? !session.rich.safe() : !safeField(session.element))) {
       end();
       return { ok: false, error: "unsafe-target-or-payload" };
+    }
+    if (session.rich) {
+      if (!session.rich.insert(message.text)) {
+        end();
+        return { ok: false, error: "rich-anchor-invalidated-or-write-failed" };
+      }
+      session.nextSequence++;
+      return { ok: true, sequence: message.sequence };
     }
     const el = session.element;
     if (!session.anchor.observe(el.value, session.pending)) {

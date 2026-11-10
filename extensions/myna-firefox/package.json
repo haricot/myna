@@ -1,0 +1,12 @@
+{
+  "name": "myna-firefox-anchor-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DOM integration tests for the experimental Myna Firefox extension",
+  "scripts": {
+    "test": "node --test test/*.test.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

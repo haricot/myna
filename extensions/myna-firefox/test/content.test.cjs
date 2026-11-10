@@ -181,7 +181,7 @@ test("independent user edits remain stable across multiple dictation commits", a
   assert.equal(h.field.selectionStart, h.field.value.length);
 });
 
-test("contenteditable and non-collapsed selections are deliberately unsupported", async () => {
+test("an unknown rich host without the DOM adapter and non-collapsed text selections are refused", async () => {
   const h = createHarness({ isContentEditable: true, isConnected: true });
   assert.equal((await h.send({ type: "myna.anchor.arm", session_id: "one" })).ok, false);
   const field = new Textarea("abcdefgh", 2);

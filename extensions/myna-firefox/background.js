@@ -67,7 +67,7 @@ async function arm(tab, automatic = false) {
     // Revoke an older session *before* installing the new DOM anchor: a late
     // "stop" message must never delete the newly captured caret.
     if (active) await stop(!automatic);
-    await browser.scripting.executeScript({ target: { tabId: tab.id }, files: ["anchor.js", "content.js"] });
+    await browser.scripting.executeScript({ target: { tabId: tab.id }, files: ["anchor.js", "rich.js", "content.js"] });
     const result = await browser.tabs.sendMessage(tab.id, { type: "myna.anchor.arm", session_id: sessionId });
     if (!result?.ok) throw new Error("No writable text field");
     // An explicit Firefox gesture pins the caret. Subsequent GNOME toggles

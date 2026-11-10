@@ -34,12 +34,30 @@ the user moves the caret or selects text elsewhere, dictated insertions keep
 the new caret or selection independent. An unfocused field's remembered
 selection is not moved just because it happens to equal the anchor offset.
 
-The content script intentionally supports ordinary text inputs only. It rejects
-passwords, payment and one-time-code autocomplete fields, readonly/disabled
-fields, non-collapsed selections, and rich `contenteditable` editors (which need
-their own transaction adapters). It fails closed when a user edit overlaps the
-anchor or an untracked edit is ambiguous. Myna segments use a session ID and an
-ordered `sequence`; late or duplicate segments are refused.
+The content script now also supports a **bounded native `contenteditable` path**:
+ordinary rich editing hosts with paragraphs, inline formatting (`strong`,
+`span`, `em`, etc.), and explicit `<br>` line breaks. It indexes the rendered
+editable DOM as a logical UTF-16 stream, keeps the anchor independent of the
+user's moved caret/selection, and inserts a text node into the original HTML
+structure. Formatting outside the insertion point stays intact. Like text
+fields, a co-located focused caret advances with dictation. It does not turn
+the rich editor into a plain textarea or copy page contents to the native host.
+
+This is **not a universal rich-editor transaction adapter**. Framework-managed
+editors (e.g. ProseMirror, Slate, Lexical or React-controlled contenteditable)
+may require their own editor API: synthetic `input` is not a trusted native
+editing transaction, and directly inserted DOM may be lost on rerender or may
+not integrate with the editor's undo history. The extension refuses hosts with
+embedded controls, noneditable islands, unsupported nodes, or more than 100k
+UTF-16 code units. A structural rerender without a corresponding `input`, an
+overlapping user edit, or an ambiguous rebase invalidates the anchor rather
+than silently dictating at another cursor. Native Firefox/Wayland acceptance
+tests are still required before enabling this broadly.
+
+The extension rejects passwords, payment and one-time-code autocomplete fields,
+readonly/disabled fields, non-collapsed selections at arming, and unsupported
+rich widgets. Myna segments use a session ID and an ordered `sequence`; late
+or duplicate segments are refused.
 
 Firefox `runtime.onMessage` listeners return a Promise for arm, stop and
 commit responses; a plain object is silently delivered as `undefined` by
@@ -47,10 +65,15 @@ commit responses; a plain object is silently delivered as `undefined` by
 badge despite a valid focused textarea. The regression suite covers this
 Firefox messaging contract as well as field edits and anchor safety.
 
-The `TextAnchor` algorithm is separated so it can be tested without a desktop:
+The `TextAnchor` algorithm is separated so it can be tested without a desktop.
+The pure rich-index tests also run with Node alone; install this extension's
+test-only dependencies to run the additional full DOM / selection tests:
 
 ```sh
 node --test extensions/myna-firefox/test/*.test.cjs
+cd extensions/myna-firefox
+npm ci
+npm test
 ```
 
 ## Native bridge, for a disposable Firefox test profile only
@@ -78,7 +101,7 @@ a private, user-owned runtime directory, never a public `/tmp` socket.
 
 In Firefox, open `about:debugging#/runtime/this-firefox`, choose
 "Load Temporary Add-on", and select this directory's `manifest.json`. Focus a
-normal textarea, position the caret, then activate the extension to authorize
+normal textarea or supported `contenteditable`, position the caret, then activate the extension to authorize
 the site and arm it. To avoid toolbar-induced focus changes, assign a keyboard shortcut in
 Firefox's *Manage Extension Shortcuts* screen: the MV3 `_execute_action` command
 is deliberately declared without a default key to avoid stealing another
@@ -86,6 +109,13 @@ shortcut. Use your normal Myna dictation shortcut. Subsequent committed segments
 must be inserted at that anchor even if you have moved the caret. Click the
 extension button again to disarm. Use a disposable Firefox profile with no
 signed-in accounts for the first native tests.
+
+For a rich-editor test, start with a disposable page containing simple
+`<div contenteditable="true"><p>...</p></div>` markup. Verify that a
+dictated segment lands inside a formatted paragraph while another selection
+remains undisturbed; then try the actual website separately. A green `ARM`
+badge indicates the target was captured, **not** that its framework will
+accept arbitrary DOM edits. Reload the temporary add-on after a source update.
 
 **Do not merge this prototype** until the remaining Firefox/Wayland hardware gate,
 Rust tests, full repository checks, packaging and confinement review pass.

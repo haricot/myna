@@ -59,6 +59,7 @@ test("a Myna prepare arms the focused, already-authorized Firefox field", async 
   h.events.nativeMessage({ type: "prepare", protocol: 1 });
   await flush();
   assert.equal(h.injections.length, 1);
+  assert.deepEqual(Array.from(h.injections[0].files), ["anchor.js", "rich.js", "content.js"]);
   assert.deepEqual(h.outbound.map((m) => m.type), ["ready", "arm", "prepare-result"]);
   assert.equal(h.outbound.at(-1).ok, true);
 });

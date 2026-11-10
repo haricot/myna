@@ -30,6 +30,13 @@ discovered by Myna, and Myna's GNOME key is never duplicated in the browser.
 In a plain text field, a focused collapsed caret that meets the Firefox anchor
 follows committed dictation text, while an independently moved caret or
 selection is preserved; a remembered caret in an unfocused field never follows.
+The optional Firefox content script also has a bounded `contenteditable` DOM
+adapter for native paragraph/inline-rich editing hosts. It maps their text,
+block separators and `<br>` to UTF-16 offsets, inserts via a DOM Range, and
+preserves an independent selection. It refuses unsafe embedded controls and
+ambiguous edits. Framework-controlled rich editors need specific transaction
+adapters and an actual Firefox acceptance gate: direct DOM edits with a
+synthetic `input` event are not guaranteed to update editor state or undo.
 
 The controller acquires the target before capture, refuses known secure fields, starts capture on activation, and finalizes on release or focus loss. Text buffered when focus is lost is discarded rather than sent to a different target. One select loop covers the whole utterance, including the events still queued after the session future finishes, so a focus loss is always seen before the next queued segment is written; the trigger and stats arms shut off once the session ends, because an edge arriving then belongs to the next utterance. A write the target refuses because its lease is gone ends the utterance as well: nothing further is attempted, and because that text reached no field, the completion reports the loss rather than a clean insertion, whatever the transcript holds. An empty transcript after a focus loss reads the same way rather than as silence.
 
