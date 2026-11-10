@@ -8,15 +8,21 @@ arming returned `ok: true`, dictation inserted into the selected text field,
 and the anchor survived the field losing focus. This is not yet a complete
 production compatibility or security gate.
 
-Firefox WebExtension activation is deliberately explicit: click the extension
-button (or a user-assigned extension shortcut) with a normal writable `input` or
-`textarea` selected. The extension receives a temporary `activeTab` grant,
-captures the current text offset, and retains the document-position anchor while
-the user edits elsewhere within the same field. It never reads the entire page,
-reports field values to the native host, or requests `<all_urls>` permissions.
+Firefox WebExtension activation requires explicit site authorization for the
+**unified GNOME shortcut**. Click the extension button with a writable `input`
+or `textarea` selected to offer a narrowly scoped host permission for that
+website. Firefox may show a permission prompt the first time; if the prompt
+changes focus, focus the field again and use the extension shortcut to arm it.
+The extension can still arm manually using a temporary `activeTab` grant
+without a persistent site grant, but GNOME cannot auto-arm that site without
+one. The permission covers only that site; the manifest declares optional
+HTTP(S) patterns solely to permit per-site requests. No `<all_urls>` or
+microphone permission is requested. No page content goes to the native host.
 
 The native host name is `myna.firefox_anchor`. No system-wide service, port,
 AT-SPI permission, or microphone privilege is required by the extension.
+The extension maintains a native port while available and reconnects after a
+temporary loss of the opt-in daemon, without touching the page on its own.
 
 The content script intentionally supports ordinary text inputs only. It rejects
 passwords, payment and one-time-code autocomplete fields, readonly/disabled
@@ -60,10 +66,10 @@ for an unconfined developer run only. You can override the path **for both
 processes** with `MYNA_FIREFOX_ANCHOR_SOCKET` in their environments. Use only
 a private, user-owned runtime directory, never a public `/tmp` socket.
 
-In Firefox Nightly 162, open `about:debugging#/runtime/this-firefox`, choose
+In Firefox, open `about:debugging#/runtime/this-firefox`, choose
 "Load Temporary Add-on", and select this directory's `manifest.json`. Focus a
-normal textarea, position the caret, then activate the extension to arm
-it. To avoid toolbar-induced focus changes, assign a keyboard shortcut in
+normal textarea, position the caret, then activate the extension to authorize
+the site and arm it. To avoid toolbar-induced focus changes, assign a keyboard shortcut in
 Firefox's *Manage Extension Shortcuts* screen: the MV3 `_execute_action` command
 is deliberately declared without a default key to avoid stealing another
 shortcut. Use your normal Myna dictation shortcut. Subsequent committed segments
@@ -77,17 +83,23 @@ Rust tests, full repository checks, packaging and confinement review pass.
 ## Local protocol
 
 Firefox starts a Native Messaging host via `browser.runtime.connectNative` and
-sends `{ "type":"arm", "protocol":1, "session_id":"..." }` through a dedicated
-`myna-firefox-host` process. This process validates the message and relays it
-to the daemon over a user-only Unix socket. On a later dictation activation,
-the daemon acquires that Firefox target instead of IBus. Each stable text
+sends `{ "type":"ready", "protocol":1 }` through a dedicated
+`myna-firefox-host` process. This process validates bounded messages and relays
+them over the private Unix socket. When Myna's global shortcut starts a session
+without an armed Firefox field, the daemon sends
+`{ "type":"prepare", "protocol":1 }`. If Firefox is foreground and the
+current site is explicitly authorized, the extension captures the caret,
+sends `{ "type":"arm", "protocol":1, "session_id":"..." }` and replies
+`{ "type":"prepare-result", "protocol":1, "ok":true }`. The daemon waits
+up to 750 ms before falling back to IBus. Each stable text
 segment comes back as `{ "type":"commit", "session_id":"...", "sequence":0,
 "text":"..." }`. The extension acknowledges with `{ "type":"commit-result",
 "protocol":1, "session_id":"...", "sequence":0, "ok":true }`;
 the daemon waits for that acknowledgement before sending another segment.
 Long UTF-8 transcripts are split at Unicode character boundaries into segments
 of at most 4096 bytes, with no data loss.
-Failures revoke the current target. Only the currently armed field's value is
+Disarming sends `{ "type":"disarm", "protocol":1 }` without closing the
+background connection. Failures revoke the current target. Only the currently armed field's value is
 used within Firefox; no field value travels to the native process.
 
 Native Messaging framing uses the reviewed MIT-licensed Rust crate
@@ -104,18 +116,16 @@ verify DOM selection preservation, input event delivery, concurrent edits,
 target closure and navigation, as well as compatibility with controlled web
 editors before the production Myna injector is changed.
 
-## Unified GNOME dictation shortcut (design boundary)
+## Unified GNOME dictation shortcut (experimental)
 
-The currently validated Firefox action **arms or disarms** the field; it does
-not start the microphone. The user's existing GNOME global shortcut activates
-Myna's control socket / D-Bus toggle. Do not bind the same accelerator to
-both GNOME and Firefox: GNOME may consume it before Firefox receives it.
+Keep the existing GNOME shortcut (`<Super>t` on the user's workstation) as the
+**only** primary dictation toggle. The extension does not need to discover or
+copy that accelerator. `Ctrl+Alt+M` may remain the optional Firefox-specific
+manual arm/disarm shortcut. Do not assign the GNOME key to both programs.
 
-A fully automatic global toggle needs the daemon to request an anchor from
-the Firefox extension *before* acquiring the text target and starting audio.
-The existing `activeTab` permission is granted by a Firefox user gesture;
-a GNOME keyboard shortcut does not grant it. The integration must retain the
-narrow permission policy, obtaining explicit per-site permission or an
-existing user-granted tab lease instead of silently broadening access to
-all websites. Until the bidirectional handshake and corresponding tests are
-implemented, use the Firefox arm action followed by the normal Myna shortcut.
+The automatic path is gated by `MYNA_FIREFOX_ANCHOR=1`, a live native port,
+Firefox being the focused window, and a prior per-site grant. On other apps or
+denied sites, Myna keeps its original IBus injector. Hermetic JavaScript tests
+cover browser permission and focus behavior; the native protocol needs its
+GNOME/Firefox/Wayland real-device timing and confinement acceptance gate before
+being enabled by default.

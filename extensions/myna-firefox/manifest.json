@@ -10,6 +10,7 @@
     }
   },
   "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
   "action": {
     "default_title": "Armer l'ancre de dictée Myna"
   },

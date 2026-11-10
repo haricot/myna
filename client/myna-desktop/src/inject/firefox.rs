@@ -20,6 +20,7 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 const MAX_FRAME: usize = 8 * 1024;
 const ACK_TIMEOUT: Duration = Duration::from_secs(3);
+const PREPARE_TIMEOUT: Duration = Duration::from_millis(750);
 const MAX_COMMIT_BYTES: usize = 4096;
 
 fn segments(text: &str) -> impl Iterator<Item = &str> {
@@ -43,9 +44,13 @@ pub fn socket_path() -> io::Result<PathBuf> {
     Ok(PathBuf::from(runtime).join("myna-firefox-anchor.sock"))
 }
 
-struct Outbound {
-    text: String,
-    result: oneshot::Sender<bool>,
+enum Outbound {
+    Prepare(oneshot::Sender<bool>),
+    Commit {
+        token: u64,
+        text: String,
+        result: oneshot::Sender<bool>,
+    },
 }
 
 struct Armed {
@@ -55,16 +60,61 @@ struct Armed {
     target: Option<watch::Sender<bool>>,
 }
 
+struct Ready {
+    token: u64,
+    send: mpsc::Sender<Outbound>,
+    revoke: watch::Sender<bool>,
+}
+
 #[derive(Default)]
 struct State {
     next_token: u64,
     armed: Option<Armed>,
+    ready: Option<Ready>,
 }
 
 #[derive(Clone, Default)]
 pub struct FirefoxHub(Arc<Mutex<State>>);
 
 impl FirefoxHub {
+    /// A Firefox background script maintains this idle connection independently
+    /// from its current page anchor. The daemon's GNOME shortcut needs no
+    /// knowledge of any Firefox keyboard shortcut.
+    async fn register_ready(&self, send: mpsc::Sender<Outbound>) -> (u64, watch::Receiver<bool>) {
+        let mut state = self.0.lock().await;
+        if let Some(old) = state.ready.take() { let _ = old.revoke.send(true); }
+        if let Some(old) = state.armed.take() {
+            let _ = old.revoke.send(true);
+            if let Some(target) = old.target { let _ = target.send(true); }
+        }
+        state.next_token += 1;
+        let token = state.next_token;
+        let (revoke, receiver) = watch::channel(false);
+        state.ready = Some(Ready { token, send, revoke });
+        (token, receiver)
+    }
+
+    async fn unregister_ready(&self, token: u64) {
+        let mut state = self.0.lock().await;
+        if state.ready.as_ref().is_some_and(|r| r.token == token) {
+            state.ready.take();
+            if let Some(old) = state.armed.take() {
+                let _ = old.revoke.send(true);
+                if let Some(target) = old.target { let _ = target.send(true); }
+            }
+        }
+    }
+
+    /// Only a connected and permissioned browser can provide an anchor.
+    /// Failure or timeout leaves Myna's existing IBus path intact.
+    async fn prepare(&self) -> bool {
+        let sender = { self.0.lock().await.ready.as_ref().map(|ready| ready.send.clone()) };
+        let Some(sender) = sender else { return false; };
+        let (result, answer) = oneshot::channel();
+        if sender.send(Outbound::Prepare(result)).await.is_err() { return false; }
+        matches!(tokio::time::timeout(PREPARE_TIMEOUT, answer).await, Ok(Ok(true)))
+    }
+
     async fn register(&self, send: mpsc::Sender<Outbound>) -> (u64, watch::Receiver<bool>) {
         let mut state = self.0.lock().await;
         if let Some(old) = state.armed.take() {
@@ -145,6 +195,19 @@ async fn read_message(input: &mut OwnedReadHalf) -> io::Result<Option<Value>> {
     serde_json::from_slice(&bytes).map(Some).map_err(io::Error::other)
 }
 
+async fn write_message(output: &mut tokio::net::unix::OwnedWriteHalf, message: Value) -> io::Result<()> {
+    output.write_all(message.to_string().as_bytes()).await?;
+    output.write_all(b"\n").await
+}
+
+struct PendingCommit {
+    token: u64,
+    session_id: String,
+    sequence: u64,
+    result: oneshot::Sender<bool>,
+    deadline: tokio::time::Instant,
+}
+
 async fn handle_connection(hub: FirefoxHub, conn: UnixStream) -> io::Result<()> {
     let (mut input, mut output) = conn.into_split();
     // A single reader task owns the stream, so a select! cancellation cannot
@@ -156,16 +219,27 @@ async fn handle_connection(hub: FirefoxHub, conn: UnixStream) -> io::Result<()> 
         }
     });
     let first = incoming_rx.recv().await.ok_or(io::ErrorKind::UnexpectedEof)?;
-    if first.as_object().is_none_or(|obj| obj.len() != 3)
-        || first.get("type").and_then(Value::as_str) != Some("arm")
-        || first.get("protocol").and_then(Value::as_u64) != Some(1) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad arm"));
-    }
-    let session_id = first.get("session_id").and_then(Value::as_str)
-        .filter(|id| id.len() == 36 && id.is_ascii())
-        .ok_or(io::ErrorKind::InvalidData)?.to_string();
     let (send, mut requests) = mpsc::channel::<Outbound>(8);
-    let (token, mut revoked) = hub.register(send).await;
+    let ready = first.get("type").and_then(Value::as_str) == Some("ready")
+        && first.as_object().is_some_and(|obj| obj.len() == 2)
+        && first.get("protocol").and_then(Value::as_u64) == Some(1);
+    let old_arm = first.get("type").and_then(Value::as_str) == Some("arm")
+        && first.as_object().is_some_and(|obj| obj.len() == 3)
+        && first.get("protocol").and_then(Value::as_u64) == Some(1)
+        && first.get("session_id").and_then(Value::as_str)
+            .is_some_and(|id| id.len() == 36 && id.is_ascii());
+    if !ready && !old_arm {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad Firefox handshake"));
+    }
+    let (connection_token, mut revoked) = if ready {
+        hub.register_ready(send.clone()).await
+    } else {
+        hub.register(send.clone()).await
+    };
+    let mut armed_token = if old_arm { Some(connection_token) } else { None };
+    let mut session_id = first.get("session_id").and_then(Value::as_str).map(str::to_owned);
+    let mut pending_prepare: Option<oneshot::Sender<bool>> = None;
+    let mut pending_commit: Option<PendingCommit> = None;
     let mut sequence: u64 = 0;
     loop {
         tokio::select! {
@@ -173,30 +247,88 @@ async fn handle_connection(hub: FirefoxHub, conn: UnixStream) -> io::Result<()> 
                 if changed.is_err() || *revoked.borrow() { break; }
             }
             msg = incoming_rx.recv() => {
-                // No unsolicited messages from the extension; an ack must
-                // correspond to the one outstanding commit below.
-                let _ = msg;
-                break;
+                let Some(msg) = msg else { break; };
+                let well_formed = msg.as_object().is_some();
+                if !well_formed || msg.get("protocol").and_then(Value::as_u64) != Some(1) { break; }
+                match msg.get("type").and_then(Value::as_str) {
+                    Some("arm") if ready && msg.as_object().is_some_and(|obj| obj.len() == 3)
+                        && pending_commit.is_none() => {
+                        // The controller has already fallen back to IBus if
+                        // this preparation's waiting receiver timed out.
+                        if pending_prepare.as_ref().is_some_and(oneshot::Sender::is_closed) {
+                            write_message(&mut output, json!({"type":"prepare-cancel","protocol":1})).await?;
+                            continue;
+                        }
+                        let Some(id) = msg.get("session_id").and_then(Value::as_str)
+                            .filter(|id| id.len() == 36 && id.is_ascii()) else { break; };
+                        let (token, _) = hub.register(send.clone()).await;
+                        armed_token = Some(token);
+                        session_id = Some(id.to_owned());
+                        sequence = 0;
+                    }
+                    Some("disarm") if ready && msg.as_object().is_some_and(|obj| obj.len() == 2) => {
+                        if let Some(token) = armed_token.take() { hub.invalidate(token).await; }
+                        session_id = None;
+                        if let Some(answer) = pending_prepare.take() { let _ = answer.send(false); }
+                    }
+                    Some("prepare-result") if ready && msg.as_object().is_some_and(|obj| obj.len() == 3) => {
+                        let Some(answer) = pending_prepare.take() else { break; };
+                        let Some(ok) = msg.get("ok").and_then(Value::as_bool) else { break; };
+                        let accepted = ok && armed_token.is_some() && !answer.is_closed();
+                        if !accepted && ok {
+                            if let Some(token) = armed_token.take() { hub.invalidate(token).await; }
+                            session_id = None;
+                            write_message(&mut output, json!({"type":"prepare-cancel","protocol":1})).await?;
+                        }
+                        let _ = answer.send(accepted);
+                    }
+                    Some("commit-result") if msg.as_object().is_some_and(|obj| obj.len() == 5) => {
+                        let Some(waiting) = pending_commit.take() else { break; };
+                        let ok = msg.get("session_id").and_then(Value::as_str) == Some(waiting.session_id.as_str())
+                            && msg.get("sequence").and_then(Value::as_u64) == Some(waiting.sequence)
+                            && msg.get("ok").and_then(Value::as_bool) == Some(true)
+                            && armed_token == Some(waiting.token);
+                        let _ = waiting.result.send(ok);
+                        if !ok {
+                            hub.invalidate(waiting.token).await;
+                            armed_token = None;
+                            session_id = None;
+                        } else {
+                            sequence += 1;
+                        }
+                    }
+                    _ => break,
+                }
             }
-            msg = requests.recv() => {
+            msg = requests.recv(), if pending_commit.is_none() => {
                 let Some(outbound) = msg else { break; };
-                let request = json!({"type":"commit", "session_id":session_id, "sequence":sequence, "text":outbound.text});
-                output.write_all(request.to_string().as_bytes()).await?;
-                output.write_all(b"\n").await?;
-                let reply = tokio::time::timeout(ACK_TIMEOUT, incoming_rx.recv()).await;
-                let ok = matches!(reply, Ok(Some(ref ack))
-                    if ack.get("type").and_then(Value::as_str) == Some("commit-result")
-                    && ack.get("protocol").and_then(Value::as_u64) == Some(1)
-                    && ack.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
-                    && ack.get("sequence").and_then(Value::as_u64) == Some(sequence)
-                    && ack.get("ok").and_then(Value::as_bool) == Some(true));
-                let _ = outbound.result.send(ok);
-                if !ok { break; }
-                sequence += 1;
+                match outbound {
+                    Outbound::Prepare(answer) if ready => {
+                        if let Some(previous) = pending_prepare.replace(answer) { let _ = previous.send(false); }
+                        write_message(&mut output, json!({"type":"prepare","protocol":1})).await?;
+                    }
+                    Outbound::Prepare(answer) => { let _ = answer.send(false); }
+                    Outbound::Commit { token, text, result } => {
+                        if armed_token != Some(token) || session_id.is_none() {
+                            let _ = result.send(false);
+                            continue;
+                        }
+                        let id = session_id.clone().expect("validated above");
+                        write_message(&mut output, json!({"type":"commit", "session_id":id, "sequence":sequence, "text":text})).await?;
+                        pending_commit = Some(PendingCommit {
+                            token, session_id: id, sequence, result,
+                            deadline: tokio::time::Instant::now() + ACK_TIMEOUT,
+                        });
+                    }
+                }
+            }
+            _ = tokio::time::sleep_until(pending_commit.as_ref().map_or_else(tokio::time::Instant::now, |p| p.deadline)), if pending_commit.is_some() => {
+                break;
             }
         }
     }
-    hub.invalidate(token).await;
+    if let Some(token) = armed_token { hub.invalidate(token).await; }
+    if ready { hub.unregister_ready(connection_token).await; }
     Ok(())
 }
 
@@ -216,7 +348,7 @@ impl Target for FirefoxTarget {
         // segments. Never truncate or split a UTF-8 code point.
         for segment in segments(text) {
             let (result, answer) = oneshot::channel();
-            self.send.send(Outbound { text: segment.to_owned(), result }).await
+            self.send.send(Outbound::Commit { token: self.token, text: segment.to_owned(), result }).await
                 .map_err(|_| InjectError::FocusLost)?;
             match tokio::time::timeout(ACK_TIMEOUT + Duration::from_secs(1), answer).await {
                 Ok(Ok(true)) if !*self.revoke.borrow() => {},
@@ -261,6 +393,9 @@ impl<I> FirefoxOrIbusInjector<I> {
 impl<I: Injector> Injector for FirefoxOrIbusInjector<I> {
     async fn acquire(&mut self) -> Result<Box<dyn Target>, InjectError> {
         if let Some(target) = self.hub.acquire().await { return Ok(Box::new(target)); }
+        if self.hub.prepare().await {
+            if let Some(target) = self.hub.acquire().await { return Ok(Box::new(target)); }
+        }
         self.fallback.acquire().await
     }
     fn capabilities(&self) -> TextInputCapabilities { self.fallback.capabilities() }
@@ -274,6 +409,7 @@ impl std::fmt::Debug for FirefoxHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     #[tokio::test]
     async fn a_new_arm_revokes_the_previous_target() {
@@ -289,6 +425,51 @@ mod tests {
     #[tokio::test]
     async fn no_implicit_target_without_explicit_arm() {
         assert!(FirefoxHub::default().acquire().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn preparing_without_a_browser_is_an_immediate_fallback() {
+        assert!(!FirefoxHub::default().prepare().await);
+    }
+
+    #[tokio::test]
+    async fn unified_toggle_prepares_before_a_firefox_commit() {
+        let hub = FirefoxHub::default();
+        let (daemon, browser) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(handle_connection(hub.clone(), daemon));
+        let (browser_read, mut browser_write) = browser.into_split();
+        let mut reader = BufReader::new(browser_read);
+        browser_write.write_all(b"{\"type\":\"ready\",\"protocol\":1}\n").await.unwrap();
+
+        // Wait for the ready socket rather than racing the daemon's reader.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if hub.0.lock().await.ready.is_some() { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+
+        let preparer = tokio::spawn({ let hub = hub.clone(); async move { hub.prepare().await } });
+        let mut command = String::new();
+        reader.read_line(&mut command).await.unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&command).unwrap(),
+            json!({"type":"prepare","protocol":1}));
+
+        let id = "badc0ffe-1234-4321-abcd-000000000000";
+        browser_write.write_all(format!("{{\"type\":\"arm\",\"protocol\":1,\"session_id\":\"{id}\"}}\n").as_bytes()).await.unwrap();
+        browser_write.write_all(b"{\"type\":\"prepare-result\",\"protocol\":1,\"ok\":true}\n").await.unwrap();
+        assert!(preparer.await.unwrap());
+
+        let mut target = hub.acquire().await.expect("prepared browser anchor");
+        let commit = tokio::spawn(async move { target.commit("bonjour").await });
+        command.clear();
+        reader.read_line(&mut command).await.unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&command).unwrap(),
+            json!({"type":"commit","session_id":id,"sequence":0,"text":"bonjour"}));
+        browser_write.write_all(format!("{{\"type\":\"commit-result\",\"protocol\":1,\"session_id\":\"{id}\",\"sequence\":0,\"ok\":true}}\n").as_bytes()).await.unwrap();
+        assert!(commit.await.unwrap().is_ok());
+        drop(browser_write);
+        task.await.unwrap().unwrap();
     }
 
     #[test]

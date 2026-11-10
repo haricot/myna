@@ -42,6 +42,13 @@ fn session_id(value: &Value) -> bool {
 fn valid_browser_message(value: &Value) -> bool {
     let Some(object) = value.as_object() else { return false };
     match object.get("type").and_then(Value::as_str) {
+        Some("ready") | Some("disarm") => {
+            object.len() == 2 && object.get("protocol").and_then(Value::as_u64) == Some(1)
+        }
+        Some("prepare-result") => {
+            object.len() == 3 && object.get("protocol").and_then(Value::as_u64) == Some(1)
+                && object.get("ok").and_then(Value::as_bool).is_some()
+        }
         Some("arm") => {
             object.len() == 3
                 && object.get("protocol").and_then(Value::as_u64) == Some(1)
@@ -61,6 +68,8 @@ fn valid_browser_message(value: &Value) -> bool {
 fn valid_daemon_message(value: &Value) -> bool {
     let Some(object) = value.as_object() else { return false };
     match object.get("type").and_then(Value::as_str) {
+        Some("prepare") | Some("prepare-cancel") => object.len() == 2
+            && object.get("protocol").and_then(Value::as_u64) == Some(1),
         Some("commit") => object.len() == 4
             && object.get("session_id").is_some_and(session_id)
             && object.get("sequence").and_then(Value::as_u64).is_some()
@@ -167,6 +176,10 @@ mod tests {
     #[test]
     fn accepts_only_the_minimal_firefox_protocol() {
         let id = "badc0ffe-1234-4321-abcd-000000000000";
+        assert!(valid_browser_message(&json!({"type":"ready","protocol":1})));
+        assert!(valid_browser_message(&json!({"type":"disarm","protocol":1})));
+        assert!(valid_browser_message(&json!({"type":"prepare-result","protocol":1,"ok":false})));
+        assert!(!valid_browser_message(&json!({"type":"prepare-result","protocol":1,"ok":true,"text":"secret"})));
         assert!(valid_browser_message(&json!({"type":"arm","protocol":1,"session_id":id})));
         assert!(valid_browser_message(&json!({"type":"commit-result","protocol":1,"session_id":id,"sequence":0,"ok":true})));
         assert!(!valid_browser_message(&json!({"type":"arm","protocol":1,"session_id":id,"text":"secret"})));
@@ -177,6 +190,9 @@ mod tests {
     #[test]
     fn daemon_may_send_only_bounded_committed_text() {
         let id = "badc0ffe-1234-4321-abcd-000000000000";
+        assert!(valid_daemon_message(&json!({"type":"prepare","protocol":1})));
+        assert!(valid_daemon_message(&json!({"type":"prepare-cancel","protocol":1})));
+        assert!(!valid_daemon_message(&json!({"type":"prepare","protocol":1,"command":"exec"})));
         assert!(valid_daemon_message(&json!({"type":"commit","session_id":id,"sequence":0,"text":"ok"})));
         assert!(!valid_daemon_message(&json!({"type":"commit","session_id":id,"sequence":0,"text":"x".repeat(5000)})));
         assert!(!valid_daemon_message(&json!({"type":"eval","code":"..."})));
