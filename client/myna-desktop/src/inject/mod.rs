@@ -9,6 +9,7 @@ pub use myna_platform::text_input::{
 };
 
 pub mod ibus;
+pub mod egui;
 pub mod firefox;
 pub mod lazy;
 pub mod mock;
