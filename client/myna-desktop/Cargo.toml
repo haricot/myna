@@ -18,6 +18,10 @@ path = "src/bin/myna-desktop.rs"
 name = "myna-firefox-host"
 path = "src/bin/myna-firefox-host.rs"
 
+[[bin]]
+name = "myna-sessiond"
+path = "src/bin/myna-sessiond.rs"
+
 [features]
 default = []
 

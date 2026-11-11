@@ -6,6 +6,20 @@ Read the top-level `.kb/agents.md` file before continuing below.
 
 # Architecture
 
+The experimental `myna-sessiond` binary is an alternative, opt-in session
+owner for native anchors. It composes the existing `DesktopController`,
+`myna-audio::CaptureSource`, `myna-orchestrator::run_dictation`, and IE115
+backend exactly once. Its `Injector` resolves an explicitly armed egui target,
+then a Firefox native-messaging target, and never falls back to IBus. This
+lets those two frontends share one microphone/session owner while retaining
+their existing anchor protocols. It is **not** yet a packaged replacement
+for `myna-desktop`: there is no D-Bus status service, GNOME integration or
+IBus fallback. Only one should run at a time. Both use the same default
+control-socket name, and the experimental binary refuses to bind an existing
+socket rather than stealing it; the established daemon likewise does not
+unlink a live socket during startup. Native app sockets are permissioned to
+the same user and still require an explicit revocable field anchor.
+
 `myna-desktop` composes three replaceable boundaries around the orchestrator:
 
 - `Trigger` produces activation edges: every poke toggles. The desktop's custom shortcut (GNOME media-keys, Xfce xfconf, Plasma kglobalaccel) calls `com.canonical.Myna.Dictation.Toggle`; `myna.toggle` connects to the control socket instead, for shortcuts older Myna Settings wrote, and both feed one channel with one parity. A held key's repeats toggle nothing (below). Stdin is debug-only.

@@ -247,11 +247,35 @@ pub async fn listen(path: PathBuf, poke: Poke) {
     }
 }
 
-/// Bind, replacing a stale socket a crashed daemon left behind (which would
-/// otherwise fail with EADDRINUSE).
+/// Bind without stealing a live daemon's socket. Recover only a same-UID
+/// socket that explicitly refuses connections (a crashed daemon's residue).
+/// This also prevents an old myna-desktop from silently taking over the
+/// shared service's control path.
 fn bind(path: &Path) -> std::io::Result<UnixListener> {
-    let _ = std::fs::remove_file(path);
-    UnixListener::bind(path)
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    match UnixListener::bind(path) {
+        Ok(listener) => Ok(listener),
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+            // An arbitrary file, symlink or socket owned by someone else is
+            // never ours to remove. A live socket is never replaced.
+            let metadata = std::fs::symlink_metadata(path)?;
+            if !metadata.file_type().is_socket()
+                || metadata.uid() != std::fs::metadata("/proc/self")?.uid()
+            {
+                return Err(err);
+            }
+            // Even for an unresponsive daemon, only ECONNREFUSED proves that
+            // no one is listening. Other errors are not authorization.
+            match std::os::unix::net::UnixStream::connect(path) {
+                Err(connect_error) if connect_error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    std::fs::remove_file(path)?;
+                    UnixListener::bind(path)
+                }
+                _ => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Removes the socket file when the listener goes.
@@ -276,6 +300,17 @@ pub async fn send_toggle(path: impl AsRef<Path>) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binding_cannot_replace_another_live_daemon() {
+        let path = std::env::temp_dir().join(format!("myna-ctl-owner-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let original = bind(&path).unwrap();
+        assert_eq!(bind(&path).unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+        assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
+        drop(original);
+        std::fs::remove_file(&path).unwrap();
+    }
 
     /// A trigger on a fresh socket. These tests poke faster than a person,
     /// so bursts are not coalesced unless `quiet` says so.
