@@ -249,6 +249,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn neither_browser_nor_egui_can_capture_without_an_anchor() {
+        let mut injector = EguiOrInjector::new(
+            EguiHub::default(),
+            FirefoxOrIbusInjector::new(FirefoxHub::default(), NoFallback),
+        );
+        assert!(injector.capabilities().preedit);
+        assert!(matches!(injector.acquire().await, Err(InjectError::NoTarget)));
+    }
+
+    #[tokio::test]
     async fn one_control_socket_owner_and_no_stolen_path() {
         let root = std::env::temp_dir().join(format!("myna-sessiond-{}-{}", std::process::id(), "exclusive"));
         std::fs::create_dir(&root).unwrap();
