@@ -6,6 +6,13 @@ Read the top-level `.kb/agents.md` file before continuing below.
 
 # Architecture
 
+`myna-desktop` is the single resident session owner for IBus, Firefox and
+egui targets. The native adapters are optional and connect to the existing
+`DesktopController`, which owns microphone capture and orchestrator sessions.
+Neither client starts another model/CUDA instance. The separate experimental
+`myna-sessiond` proposal was archived without merging; the original IBus,
+GNOME D-Bus, indicator and shortcut paths remain in place.
+
 `myna-desktop` composes three replaceable boundaries around the orchestrator:
 
 - `Trigger` produces activation edges: every poke toggles. The desktop's custom shortcut (GNOME media-keys, Xfce xfconf, Plasma kglobalaccel) calls `com.canonical.Myna.Dictation.Toggle`; `myna.toggle` connects to the control socket instead, for shortcuts older Myna Settings wrote, and both feed one channel with one parity. A held key's repeats toggle nothing (below). Stdin is debug-only.

@@ -51,6 +51,7 @@ use myna_desktop::indicator::dynamic::DynamicIndicator;
 use myna_desktop::indicator::notify::NotifyIndicator;
 use myna_desktop::indicator::readiness::{Readiness, ReadinessTee};
 use myna_desktop::inject::lazy::{IbusConnect, LazyInjector};
+use myna_desktop::inject::egui::{socket_path as egui_socket_path, EguiHub, EguiOrInjector};
 use myna_desktop::inject::firefox::{socket_path as firefox_socket_path, FirefoxHub, FirefoxOrIbusInjector};
 use myna_desktop::inject::Injector as _;
 use myna_desktop::platform::Platform;
@@ -723,7 +724,26 @@ async fn run_controller(
             Err(err) => eprintln!("myna-desktop: Firefox anchor disabled: {err}"),
         }
     }
-    let injector = FirefoxOrIbusInjector::new(firefox, LazyInjector::new(IbusConnect));
+    let egui = EguiHub::default();
+    // Like the Firefox anchor, this is a deliberately opt-in local development
+    // endpoint, not a new published D-Bus API that broadcasts transcripts.
+    if std::env::var("MYNA_EGUI_ANCHOR").as_deref() == Ok("1") {
+        match egui_socket_path() {
+            Ok(path) => {
+                let hub = egui.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = hub.serve(path).await {
+                        eprintln!("myna-desktop: egui anchor unavailable: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("myna-desktop: egui anchor disabled: {err}"),
+        }
+    }
+    let injector = EguiOrInjector::new(
+        egui,
+        FirefoxOrIbusInjector::new(firefox, LazyInjector::new(IbusConnect)),
+    );
     // Every poke reaches the text input backend at once, a held key's repeats
     // too: they keep its grab's blip open while the controller is busy.
     trigger.hear(injector.activation());
