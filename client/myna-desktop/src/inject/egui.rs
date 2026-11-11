@@ -46,6 +46,7 @@ fn segments(text: &str) -> impl Iterator<Item = &str> {
 
 enum Outbound {
     Commit { token: u64, text: String, reply: oneshot::Sender<bool> },
+    Preview { token: u64, text: String },
 }
 
 struct Armed {
@@ -144,7 +145,11 @@ async fn read_frame(reader: &mut OwnedReadHalf) -> io::Result<Option<Value>> {
 }
 
 async fn write_frame(writer: &mut OwnedWriteHalf, message: Value) -> io::Result<()> {
-    writer.write_all(message.to_string().as_bytes()).await?;
+    let frame = message.to_string();
+    if frame.len() > MAX_FRAME {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "egui protocol frame too large"));
+    }
+    writer.write_all(frame.as_bytes()).await?;
     writer.write_all(b"\n").await
 }
 
@@ -194,7 +199,15 @@ async fn handle_connection(hub: EguiHub, conn: UnixStream) -> io::Result<()> {
                     break;
                 }
                 request = requests.recv() => {
-                    let Some(Outbound::Commit { token: request_token, text, reply }) = request else { break; };
+                    let Some(request) = request else { break; };
+                    if let Outbound::Preview { token: request_token, text } = request {
+                        if request_token == token {
+                            write_frame(&mut writer, json!({"type":"preview", "protocol":PROTOCOL,
+                                "session_id":id, "sequence":sequence, "text":text})).await?;
+                        }
+                        continue;
+                    }
+                    let Outbound::Commit { token: request_token, text, reply } = request else { unreachable!() };
                     if request_token != token { let _ = reply.send(false); continue; }
                     write_frame(&mut writer, json!({"type":"commit", "protocol":PROTOCOL,
                         "session_id":id, "sequence":sequence, "text":text})).await?;
@@ -248,6 +261,14 @@ impl Target for EguiTarget {
             }
         }
         Ok(())
+    }
+
+    async fn set_preedit(&mut self, text: &str) {
+        if *self.revoke.borrow() { return; }
+        // Preview is volatile and never inserted into the stable document.
+        // Bound it to a worst-case 4 KiB of UTF-8, including non-ASCII text.
+        let limited: String = text.chars().take(1000).collect();
+        let _ = self.send.try_send(Outbound::Preview { token: self.token, text: limited });
     }
 
     fn focus_events(&self) -> BoxStream<'static, FocusEvent> {
@@ -316,6 +337,34 @@ mod tests {
         output.write_all(format!("{{\"type\":\"commit-result\",\"protocol\":1,\"session_id\":\"{id}\",\"sequence\":99,\"ok\":true}}\n").as_bytes()).await.unwrap();
         assert!(matches!(commit.await.unwrap(), Err(InjectError::FocusLost)));
         assert!(hub.acquire().await.is_none());
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn preview_is_volatile_and_stable_commit_needs_ack() {
+        let hub = EguiHub::default();
+        let (daemon, app) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(handle_connection(hub.clone(), daemon));
+        let (input, mut output) = app.into_split();
+        let mut reader = BufReader::new(input);
+        let id = "12345678-1234-1234-1234-123456789abc";
+        output.write_all(format!("{{\"type\":\"arm\",\"protocol\":1,\"session_id\":\"{id}\"}}\n").as_bytes()).await.unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let mut target = hub.acquire().await.unwrap();
+        target.set_preedit("Bonjour peut-").await;
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap(),
+            json!({"type":"preview", "protocol":1, "session_id":id, "sequence":0, "text":"Bonjour peut-"}));
+        let commit = tokio::spawn(async move { target.commit("Bonjour !").await });
+        line.clear();
+        reader.read_line(&mut line).await.unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["text"], "Bonjour !");
+        output.write_all(format!("{{\"type\":\"commit-result\",\"protocol\":1,\"session_id\":\"{id}\",\"sequence\":0,\"ok\":true}}\n").as_bytes()).await.unwrap();
+        assert!(commit.await.unwrap().is_ok());
+        drop(output);
+        drop(reader);
         task.await.unwrap().unwrap();
     }
 
