@@ -10,6 +10,8 @@ model is loaded in the Firefox extension or in `myna-egui`.
 First stop the running `myna-desktop` user service (do not disable it
 permanently). **Never run both session owners together.** The new binary
 refuses to bind the existing Myna control socket, rather than replacing it.
+This detects conflicts only within the **same** runtime directory; a snap
+with a separate `XDG_RUNTIME_DIR` is not automatically detected.
 
 ```sh
 cd client
