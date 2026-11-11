@@ -247,11 +247,33 @@ pub async fn listen(path: PathBuf, poke: Poke) {
     }
 }
 
-/// Bind, replacing a stale socket a crashed daemon left behind (which would
-/// otherwise fail with EADDRINUSE).
+/// Bind without stealing a live daemon's socket. Recover only a same-UID
+/// socket that explicitly refuses connections (a crashed daemon's residue).
 fn bind(path: &Path) -> std::io::Result<UnixListener> {
-    let _ = std::fs::remove_file(path);
-    UnixListener::bind(path)
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    match UnixListener::bind(path) {
+        Ok(listener) => Ok(listener),
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+            // Never unlink an arbitrary file, a symlink, or another user's socket.
+            let metadata = std::fs::symlink_metadata(path)?;
+            if !metadata.file_type().is_socket()
+                || metadata.uid() != std::fs::metadata("/proc/self")?.uid()
+            {
+                return Err(err);
+            }
+            // A live socket is never replaced; other errors do not prove staleness.
+            match std::os::unix::net::UnixStream::connect(path) {
+                Err(connect_error)
+                    if connect_error.kind() == std::io::ErrorKind::ConnectionRefused =>
+                {
+                    std::fs::remove_file(path)?;
+                    UnixListener::bind(path)
+                }
+                _ => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Removes the socket file when the listener goes.
@@ -276,6 +298,44 @@ pub async fn send_toggle(path: impl AsRef<Path>) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binding_does_not_replace_a_live_daemon() {
+        let dir = std::env::temp_dir().join(format!("myna-live-socket-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("control.sock");
+        let original = bind(&path).unwrap();
+        assert_eq!(bind(&path).unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+        assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
+        drop(original);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn binding_recovers_a_stale_owned_socket() {
+        let dir = std::env::temp_dir().join(format!("myna-stale-socket-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("control.sock");
+        drop(bind(&path).unwrap());
+        let recovered = bind(&path).unwrap();
+        assert!(std::os::unix::net::UnixStream::connect(&path).is_ok());
+        drop(recovered);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn binding_preserves_a_non_socket_file() {
+        let dir = std::env::temp_dir().join(format!("myna-file-socket-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("control.sock");
+        std::fs::write(&path, b"private data").unwrap();
+        assert!(bind(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"private data");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     /// A trigger on a fresh socket. These tests poke faster than a person,
     /// so bursts are not coalesced unless `quiet` says so.
