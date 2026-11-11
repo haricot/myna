@@ -220,7 +220,8 @@ async fn serve(options: Options) -> io::Result<()> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let is_toggle = std::env::args().any(|arg| arg == "--toggle");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let is_toggle = args.len() == 1 && args[0] == "--toggle";
     let result = parse();
     if is_toggle && matches!(result, Ok(None)) {
         return match send_toggle(default_socket_path()).await {
