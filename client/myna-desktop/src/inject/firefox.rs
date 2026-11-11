@@ -5,7 +5,7 @@
 //! No document content is ever requested from Firefox.
 
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -152,16 +152,22 @@ impl FirefoxHub {
     /// socket is never deleted (it might belong to another live process).
     pub async fn serve(&self, path: PathBuf) -> io::Result<()> {
         let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
-        let metadata = std::fs::metadata(parent)?;
-        if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
+        let metadata = std::fs::symlink_metadata(parent)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink()
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.uid() != std::fs::metadata("/proc/self")?.uid()
+        {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                "Firefox socket requires a private (0700) runtime directory"));
+                "Firefox socket requires a private, same-user runtime directory"));
         }
         let listener = UnixListener::bind(&path)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let _guard = SocketGuard(path);
         loop {
             let (conn, _) = listener.accept().await?;
+            if !conn.peer_cred().is_ok_and(|cred| cred.uid() == metadata.uid()) {
+                continue;
+            }
             let hub = self.clone();
             tokio::spawn(async move {
                 if let Err(err) = handle_connection(hub, conn).await {
@@ -218,7 +224,9 @@ async fn handle_connection(hub: FirefoxHub, conn: UnixStream) -> io::Result<()> 
             if incoming_tx.send(message).await.is_err() { break; }
         }
     });
-    let first = incoming_rx.recv().await.ok_or(io::ErrorKind::UnexpectedEof)?;
+    let first = tokio::time::timeout(Duration::from_secs(2), incoming_rx.recv()).await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Firefox handshake timeout"))?
+        .ok_or(io::ErrorKind::UnexpectedEof)?;
     let (send, mut requests) = mpsc::channel::<Outbound>(8);
     let ready = first.get("type").and_then(Value::as_str) == Some("ready")
         && first.as_object().is_some_and(|obj| obj.len() == 2)
