@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn a_bad_override_is_generic() {
-        let bad = platform(&[("XDG_CURRENT_DESKTOP", "GNOME"), ("MYNA_PLATFORM", "kde")]);
+        let bad = platform(&[("XDG_CURRENT_DESKTOP", "GNOME"), ("MYNA_PLATFORM", "cinnamon")]);
         assert_eq!(bad.profile(), Profile::Generic);
     }
 }
