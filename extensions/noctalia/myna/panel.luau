@@ -9,6 +9,16 @@ local opened = false
 local checking = false
 local busy = false
 local feedback = ""
+local control = noctalia.expandPath("~/.local/bin/myna-control")
+local captureMode = "unknown"       -- smart or manual
+local recognitionMode = "unknown"   -- streaming, offline, hybrid
+local checkingSettings = false
+local validCapture = {smart=true, manual=true}
+local validRecognition = {streaming=true, offline=true, hybrid=true}
+
+local function firstWord(s)
+  return (s or ""):match("^%s*([%w_-]+)") or ""
+end
 
 local function isReady()
   return clientState == "active" and providerState == "active"
@@ -63,6 +73,66 @@ local function render()
         onClick = "onStopClicked",
       }),
     }),
+    ui.separator({ spacing = 2 }),
+    ui.label({
+      text = "Reconnaissance : " .. (
+        recognitionMode == "streaming" and "Streaming" or
+        recognitionMode == "offline" and "Offline" or
+        recognitionMode == "hybrid" and "Hybride" or "Indisponible"
+      ),
+      fontWeight = "medium",
+    }),
+    ui.row({ gap = 5 }, {
+      ui.button({
+        text = "Streaming", controlSize = "sm",
+        flexGrow = 1, selected = recognitionMode == "streaming",
+        enabled = not busy and recognitionMode ~= "streaming",
+        onClick = "onStreamingClicked",
+      }),
+      ui.button({
+        text = "Offline", controlSize = "sm",
+        flexGrow = 1, selected = recognitionMode == "offline",
+        enabled = not busy and recognitionMode ~= "offline",
+        onClick = "onOfflineClicked",
+      }),
+      ui.button({
+        text = "Hybride", controlSize = "sm",
+        flexGrow = 1, selected = recognitionMode == "hybrid",
+        enabled = not busy and recognitionMode ~= "hybrid",
+        onClick = "onHybridClicked",
+      }),
+    }),
+    ui.label({
+      text = "Hybride : transcription provisoire, puis résultat final hors ligne.",
+      color = "on_surface_variant", fontSize = 12, maxLines = 2,
+    }),
+    ui.separator({ spacing = 2 }),
+    ui.label({
+      text = "Capture : " .. (
+        captureMode == "smart" and "SmartTurn automatique" or
+        captureMode == "manual" and "Manuel continu" or "Indisponible"
+      ),
+      fontWeight = "medium",
+    }),
+    ui.row({ gap = 6 }, {
+      ui.button({
+        text = "SmartTurn (auto)", controlSize = "sm",
+        flexGrow = 1, selected = captureMode == "smart",
+        enabled = not busy and captureMode ~= "smart",
+        onClick = "onSmartClicked",
+      }),
+      ui.button({
+        text = "Manuel continu", controlSize = "sm",
+        flexGrow = 1, selected = captureMode == "manual",
+        enabled = not busy and captureMode ~= "manual",
+        onClick = "onManualClicked",
+      }),
+    }),
+    ui.label({
+      text = "Manuel : second appui sur Ctrl+Alt+M pour arrêter.",
+      color = "on_surface_variant", fontSize = 12, maxLines = 2,
+    }),
+    ui.separator({ spacing = 2 }),
     ui.button({
       text = "Actualiser l'état",
       glyph = "refresh",
@@ -104,6 +174,60 @@ local function refresh()
   end
 end
 
+local function refreshSettings()
+  if checkingSettings or busy then return end
+  checkingSettings = true
+  local ok = noctalia.runAsync({control, "recognition"}, function(result)
+    local value = firstWord(result.stdout)
+    recognitionMode = (result.exitCode == 0 and validRecognition[value]) and value or "unknown"
+    local ok2 = noctalia.runAsync({control, "mode"}, function(res)
+      checkingSettings = false
+      local mode = firstWord(res.stdout)
+      captureMode = (res.exitCode == 0 and validCapture[mode]) and mode or "unknown"
+      render()
+    end)
+    if not ok2 then
+      checkingSettings = false
+      captureMode = "unknown"
+      render()
+    end
+  end)
+  if not ok then
+    checkingSettings = false
+    recognitionMode = "unknown"
+    captureMode = "unknown"
+    render()
+  end
+end
+
+local function settingAction(kind, value)
+  if busy then return end
+  if kind == "mode" then
+    if not validCapture[value] or captureMode == value then return end
+  elseif kind == "recognition" then
+    if not validRecognition[value] or recognitionMode == value then return end
+  else
+    return
+  end
+  busy = true
+  feedback = "Application du réglage… la dictée peut être interrompue."
+  render()
+  -- Fixed allowed values; do not pass transcriptions or arbitrary commands.
+  local ok = noctalia.runAsync({control, kind .. "-apply", value}, function(result)
+    busy = false
+    feedback = (result.exitCode == 0 and not result.timedOut)
+      and ("Réglage appliqué : " .. value)
+      or "Échec du réglage : vérifier myna-control et les journaux."
+    refreshSettings()
+    render()
+  end)
+  if not ok then
+    busy = false
+    feedback = "Impossible de lancer myna-control."
+    render()
+  end
+end
+
 local function runServiceAction(verb)
   if busy or (verb ~= "start" and verb ~= "stop") then return end
   busy = true
@@ -120,6 +244,7 @@ local function runServiceAction(verb)
       feedback = "Échec systemd : consulter journalctl --user -u myna-desktop.service"
     end
     refresh()
+    refreshSettings()
     render()
   end)
   if not accepted then
@@ -136,6 +261,7 @@ function onOpen(_context)
   feedback = ""
   render()
   refresh()
+  refreshSettings()
 end
 
 function onClose()
@@ -143,7 +269,10 @@ function onClose()
 end
 
 function update()
-  if opened and not busy then refresh() end
+  if opened and not busy then
+    refresh()
+    refreshSettings()
+  end
 end
 
 function onStartClicked()
@@ -156,7 +285,14 @@ end
 
 function onRefreshClicked()
   refresh()
+  refreshSettings()
 end
+
+function onStreamingClicked() settingAction("recognition", "streaming") end
+function onOfflineClicked() settingAction("recognition", "offline") end
+function onHybridClicked() settingAction("recognition", "hybrid") end
+function onSmartClicked() settingAction("mode", "smart") end
+function onManualClicked() settingAction("mode", "manual") end
 
 function onCloseClicked()
   panel.close()
