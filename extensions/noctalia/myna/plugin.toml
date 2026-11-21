@@ -1,0 +1,23 @@
+id = "haricot/myna"
+name = "Myna"
+version = "0.1.0"
+plugin_api = 24
+author = "haricot"
+license = "GPL-3.0-only"
+icon = "microphone"
+description = "Status and start/stop controls for the local Myna Candle dictation services."
+tags = ["dictation", "audio", "system"]
+dependencies = ["systemctl"]
+
+[[widget]]
+id = "status"
+entry = "widget.luau"
+
+[[panel]]
+id = "panel"
+entry = "panel.luau"
+width = 360
+height = 300
+placement = "attached"
+position = "auto"
+open_near_click = true
