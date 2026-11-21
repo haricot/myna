@@ -34,7 +34,7 @@ local function render()
   local status = ready and "Prêt" or (isPartlyActive() and "Partiellement démarré" or "Arrêté")
   local statusColor = ready and "primary" or "on_surface_variant"
 
-  panel.render(ui.column({ gap = 14, flexGrow = 1 }, {
+  panel.render(ui.scroll({ flexGrow = 1 }, { ui.column({ gap = 14 }, {
     ui.row({ align = "center", justify = "space_between", gap = 8 }, {
       ui.label({
         text = "Myna — Dictée locale",
@@ -146,7 +146,7 @@ local function render()
       fontSize = 12,
       maxLines = 2,
     }),
-  }))
+  }) }))
 end
 
 local function refresh()
