@@ -1,52 +1,69 @@
-# Myna for Noctalia 5.6.0
+# Myna pour Noctalia 5.6.0
 
-Local bar widget + panel for **haricot/myna**. No change to the Candle
-provider, SmartTurn, dictation settings, or existing Niri keyboard shortcut.
+Plugin local **haricot/myna** : indicateur d'état + panneau de contrôle.
+Il conserve le provider Candle/Nemotron, SmartTurn, les ancres Firefox/egui
+et le raccourci Niri `Ctrl+Alt+M` ; aucune recompilation Rust n'est nécessaire.
 
-The plugin uses fixed-argument `systemctl --user` calls to read and control:
-- `myna-desktop.service`
-- `myna-candle-provider.service`
+## Commandes du menu
 
-It never uses sudo, a shell interpreter, or an arbitrary command string.
-It neither enables nor disables systemd autostart; the menu only starts and
-stops the running units. Starting includes both units; stopping stops both.
-Myna's systemd unit dependency and ordering are retained. No separate daemon
-is created by the plugin.
+| Fonction | Commande réellement utilisée |
+| --- | --- |
+| Démarrer le client + provider | `systemctl --user start myna-desktop.service myna-candle-provider.service` |
+| Arrêter les deux services | `systemctl --user stop myna-desktop.service myna-candle-provider.service` |
+| Lire les états | `systemctl --user is-active ...` |
+| Reconnaissance : Streaming / Offline / Hybride | `~/.local/bin/myna-control recognition`, puis `recognition-apply streaming\|offline\|hybrid` |
+| Capture : SmartTurn automatique / Manuel continu | `~/.local/bin/myna-control mode`, puis `mode-apply smart\|manual` |
 
-## Install from the existing Myna checkout
+Les boutons sélectionnés correspondent aux valeurs réelles retournées par le
+script local, non à des valeurs fictives. Un choix est appliqué immédiatement,
+un seul à la fois. Il peut redémarrer des services et interrompre une dictée
+en cours ; le script `myna-control` en garde la responsabilité.
 
-Update the `feature/myna-candle-native-anchors-r1` branch, then in Niri +
-Noctalia 5.6.0:
+**Streaming** décrit le moteur de reconnaissance en temps réel ;
+**Manuel continu** désactive uniquement l'arrêt automatique côté client
+(`--auto-endpoint`) : la dictée continue jusqu'au deuxième appui sur
+`Ctrl+Alt+M`. **Hybride** conserve le provisoire streaming et le final offline.
+Ces deux familles de réglages sont indépendantes.
 
-```sh
+Le plugin utilise uniquement `noctalia.runAsync` avec une liste d'arguments
+fixes validés : pas de `sh -c`, sudo, texte ASR dans des commandes, shell libre,
+ni nouvelle permission système. Les services restent pilotés par systemd user.
+
+## Installer / actualiser
+
+```bash
 cd ~/tmp/myna-candle-client-native
 git pull --ff-only
+
+# Si la source path haricot-myna a déjà été ajoutée, le panneau est
+# normalement rechargé lorsque son fichier .luau change :
+noctalia msg panel-toggle haricot/myna:panel
+```
+
+Si la source n'a jamais été ajoutée :
+
+```bash
 noctalia msg plugins source add haricot-myna path "$PWD/extensions/noctalia"
 noctalia msg plugins enable haricot/myna
 noctalia msg panel-toggle haricot/myna:panel
 ```
 
-To display the status indicator, use Noctalia Settings → Bar → Add widget →
-**Myna**, identified as `haricot/myna:status`. Clicking its microphone icon
-toggles `haricot/myna:panel`. The panel is attached near the bar widget.
+Le widget de barre peut être placé dans Noctalia Settings → Bar → Add Widget →
+Myna (`haricot/myna:status`). Un clic sur l'icône ouvre le panneau.
 
-The menu offers **Démarrer Myna**, **Arrêter Myna**, and **Actualiser l'état**.
-Status is polled asynchronously every 3.5 seconds while the widget or panel
-is running and immediately after a service action. An inactive service is not
-treated as a subprocess failure; the two lines from `systemctl is-active`
-are interpreted separately.
+Si l'ancienne taille de panneau persiste, désactivez puis réactivez
+`haricot/myna` dans Settings → Plugins, sans redémarrer le provider CUDA.
 
-Direct terminal verification:
+## Vérifier sans modifier les réglages
 
-```sh
+```bash
+~/.local/bin/myna-control recognition
+~/.local/bin/myna-control mode
 systemctl --user is-active myna-desktop.service myna-candle-provider.service
-journalctl --user -u myna-desktop.service -u myna-candle-provider.service -n 30 --no-pager
 ```
 
-Notes:
-- The menu does **not** trigger the dictation toggle; keep the existing Niri
-  keyboard shortcut bound to `myna-desktop --toggle`.
-- Noctalia scripts are trusted user-code. Enable this plugin only from your
-  own reviewed checkout.
-- This is not yet verified in a running Niri/Noctalia graphical session.
-- Nothing is started simply by enabling the widget.
+Les commandes `mode-apply` et `recognition-apply` sont celles de l'installation
+Myna native personnalisée ; elles ne sont pas garanties par le Myna officiel.
+
+Statut : modification de plugin inspectée statiquement et publiée sur GitHub.
+Les clics et le rendu sur une session Niri/Noctalia réelle restent à qualifier.
