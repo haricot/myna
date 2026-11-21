@@ -1310,6 +1310,7 @@ dependencies = [
  "myna-core",
  "myna-orchestrator",
  "myna-platform",
+ "native_messaging",
  "notify-rust",
  "serde",
  "serde_json",
@@ -1362,6 +1363,18 @@ dependencies = [
  "myna-platform",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "native_messaging"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c69815c3f5651282fb4ef60bca0e5d5e19841c2a0deec17cea09decb236d989a"
+dependencies = [
+ "once_cell",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

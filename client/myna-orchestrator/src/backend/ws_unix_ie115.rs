@@ -32,8 +32,11 @@ use serde_json::{json, Value};
 use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message;
 
+#[path = "candle_endpoint.rs"]
+mod candle_endpoint;
 use super::transport::{self, Dialect};
 use super::{BackendClient, BackendError, BackendHandle, Outbound};
+use candle_endpoint::EndpointStop;
 
 const OUTBOUND_CAPACITY: usize = 16;
 const EVENT_CAPACITY: usize = 64;
@@ -56,6 +59,7 @@ pub struct WsUnixIe115Backend {
     socket_path: std::path::PathBuf,
     base64_audio: bool,
     ws_path: String,
+    endpoint: Option<EndpointStop>,
 }
 
 impl WsUnixIe115Backend {
@@ -64,7 +68,15 @@ impl WsUnixIe115Backend {
             socket_path: socket_path.into(),
             base64_audio: false,
             ws_path: DEFAULT_WS_PATH.into(),
+            endpoint: None,
         }
+    }
+
+    /// Stop this specific capture on a matching Candle endpoint confirmation.
+    /// Its normal PCM drain sends the commit; the endpoint event is nonterminal.
+    pub fn auto_endpointing(mut self, stop: myna_core::StopHandle) -> Self {
+        self.endpoint = Some(EndpointStop::new(stop));
+        self
     }
 
     /// Send audio as base64 `input_audio_buffer.append` frames (OpenAI parity)
@@ -137,8 +149,11 @@ impl BackendClient for WsUnixIe115Backend {
         // canonical/whisper-snap, which kills the connection and loses audio).
         let has_config = config.language.is_some() || config.prompt.is_some();
         let needs_shape_sniff = self.ws_path == DEFAULT_WS_PATH;
-        if has_config || needs_shape_sniff {
-            let frame = session_update_frame(&config);
+        if has_config || needs_shape_sniff || self.endpoint.is_some() {
+            let mut frame = session_update_frame(&config);
+            if let Some(endpoint) = &self.endpoint {
+                frame["session"]["candle_endpointing"] = endpoint.request();
+            }
             ws.send(Message::text(frame.to_string()))
                 .await
                 .map_err(|e| BackendError::Transport(e.to_string()))?;
@@ -147,6 +162,7 @@ impl BackendClient for WsUnixIe115Backend {
         let dialect = Ie115 {
             base64_audio: self.base64_audio,
             after_commit: false,
+            endpoint: self.endpoint.clone(),
         };
         let (sink, events) = transport::spawn(ws, dialect, OUTBOUND_CAPACITY, EVENT_CAPACITY);
         // IE115 carries no protocol_version.
@@ -274,6 +290,7 @@ fn append_frame(chunk: &PcmChunk) -> String {
 struct Ie115 {
     base64_audio: bool,
     after_commit: bool,
+    endpoint: Option<EndpointStop>,
 }
 
 impl Dialect for Ie115 {
@@ -292,6 +309,14 @@ impl Dialect for Ie115 {
     fn decode(&mut self, text: &str) -> Result<Vec<TranscriptionEvent>, BackendError> {
         let value: Value = serde_json::from_str(text)
             .map_err(|e| BackendError::Transport(format!("bad JSON: {e}")))?;
+        if let Some(endpoint) = &mut self.endpoint {
+            if endpoint.receive(&value, self.after_commit) {
+                myna_core::info_log!(
+                    "endpoint",
+                    "confirmed by provider: draining capture before commit"
+                );
+            }
+        }
         Ok(decode_frame(&value, self.after_commit))
     }
 }
@@ -405,6 +430,7 @@ mod tests {
         let mut dialect = Ie115 {
             base64_audio: false,
             after_commit: false,
+            endpoint: None,
         };
         dialect.written(false);
         assert!(dialect.decode(&completed("")).unwrap().is_empty());
@@ -420,6 +446,7 @@ mod tests {
         let mut raw = Ie115 {
             base64_audio: false,
             after_commit: false,
+            endpoint: None,
         };
         assert_eq!(
             raw.encode(Outbound::Audio(chunk())),
@@ -428,6 +455,7 @@ mod tests {
         let mut base64 = Ie115 {
             base64_audio: true,
             after_commit: false,
+            endpoint: None,
         };
         assert_eq!(
             base64.encode(Outbound::Audio(chunk())),

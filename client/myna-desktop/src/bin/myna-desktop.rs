@@ -50,6 +50,9 @@ use myna_desktop::indicator::dbus::DbusIndicator;
 use myna_desktop::indicator::dynamic::DynamicIndicator;
 use myna_desktop::indicator::notify::NotifyIndicator;
 use myna_desktop::indicator::readiness::{Readiness, ReadinessTee};
+use myna_desktop::inject::anchor::FocusAnchor;
+use myna_desktop::inject::egui::{socket_path as egui_socket_path, EguiHub, EguiOrInjector};
+use myna_desktop::inject::firefox::{socket_path as firefox_socket_path, FirefoxHub, FirefoxOrIbusInjector};
 use myna_desktop::inject::lazy::{IbusConnect, LazyInjector};
 use myna_desktop::inject::Injector as _;
 use myna_desktop::platform::Platform;
@@ -100,6 +103,9 @@ ACTIVATION (default: the control socket):
     --stdin            DEBUG: drive from the terminal (injects into the terminal)
 
 OVERRIDES (for debugging; the daemon resolves all three by itself):
+    --auto-endpoint    opt in to confirmed Candle endpoints for this capture
+    --anchor-focus     keep the starting window focused until dictation finishes
+                       (requires the Myna Focus Anchor GNOME extension)
     --preedit          force the in-flight hypothesis into the field's preedit
     --no-preedit       force commit-only, even in streaming mode
     --no-dbus          do not serve com.canonical.Myna.Dictation (notifications only).
@@ -379,6 +385,8 @@ struct Args {
     /// `None` = resolve from the persisted streaming mode; `Some` = forced.
     preedit: Option<bool>,
     no_dbus: bool,
+    auto_endpoint: bool,
+    anchor_focus: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -413,6 +421,8 @@ fn parse_args_from(
             "--preedit" => a.preedit = Some(true),
             "--no-preedit" => a.preedit = Some(false),
             "--no-dbus" => a.no_dbus = true,
+            "--auto-endpoint" => a.auto_endpoint = true,
+            "--anchor-focus" => a.anchor_focus = true,
             other => return Err(format!("unknown argument: {other}\n\n{USAGE}")),
         }
     }
@@ -518,6 +528,7 @@ fn make_session(
     let language = live.language.clone();
     let target = args.target.clone();
     let forced_preedit = args.preedit;
+    let auto_endpoint = args.auto_endpoint;
     let live = live.clone();
     move |events: mpsc::Sender<OrchestratorEvent>| {
         let readiness = readiness.clone();
@@ -548,13 +559,16 @@ fn make_session(
                 return no_backend(e);
             }
         };
-        let backend = WsUnixIe115Backend::new(&socket);
+        let mut backend = WsUnixIe115Backend::new(&socket);
         let mut builder = CaptureSource::builder(AudioFormat::default());
         if let Some(node) = &target {
             builder = builder.target(node.clone());
         }
         let source = builder.backend(Box::new(PipeWireBackend::new())).build();
         let stop = source.stop_handle();
+        if auto_endpoint {
+            backend = backend.auto_endpointing(stop.clone());
+        }
         // The controller reads the same tap the level pump does, for the
         // silence timeout and the end-of-session input verdict.
         let stats = source.stats();
@@ -686,7 +700,46 @@ async fn run_controller(
     let _settings_watch = live.follow(&args, pump_bus.clone());
     let restart = Arc::new(tokio::sync::Notify::new());
 
-    let injector = LazyInjector::new(IbusConnect);
+    // Optional, explicitly authorized native-egui and Firefox destinations.
+    // Their transcript channels are private Unix sockets, never status D-Bus.
+    let firefox = FirefoxHub::default();
+    if std::env::var("MYNA_FIREFOX_ANCHOR").as_deref() == Ok("1") {
+        match firefox_socket_path() {
+            Ok(path) => {
+                let hub = firefox.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = hub.serve(path).await {
+                        eprintln!("myna-desktop: Firefox anchor unavailable: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("myna-desktop: Firefox anchor disabled: {err}"),
+        }
+    }
+    let egui = EguiHub::default();
+    if std::env::var("MYNA_EGUI_ANCHOR").as_deref() == Ok("1") {
+        match egui_socket_path() {
+            Ok(path) => {
+                let hub = egui.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = hub.serve(path).await {
+                        eprintln!("myna-desktop: egui anchor unavailable: {err}");
+                    }
+                });
+            }
+            Err(err) => eprintln!("myna-desktop: egui anchor disabled: {err}"),
+        }
+    }
+    // Priority: explicitly armed egui, then authorized Firefox, then IBus.
+    // FocusAnchor is deliberately *only* on the IBus path. It must not
+    // interfere with egui/Firefox anchors or change Candle endpointing.
+    let injector = EguiOrInjector::new(
+        egui,
+        FirefoxOrIbusInjector::new(
+            firefox,
+            FocusAnchor::new(LazyInjector::new(IbusConnect), args.anchor_focus),
+        ),
+    );
     // Every poke reaches the text input backend at once, a held key's repeats
     // too: they keep its grab's blip open while the controller is busy.
     trigger.hear(injector.activation());
@@ -1315,6 +1368,31 @@ mod tests {
     /// init_i18n mutates process-global gettext state (locale, domain
     /// bindings, textdomain) and the test env, so run these serially.
     static I18N_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn automatic_endpointing_is_explicit_and_off_by_default() {
+        assert!(!Args::default().auto_endpoint);
+        let parsed =
+            parse_args_from(args(&["--socket", "/tmp/candle.sock", "--auto-endpoint"])).unwrap();
+        assert!(parsed.auto_endpoint);
+    }
+
+    #[test]
+    fn focus_anchoring_is_explicit_and_independent_of_automatic_endpointing() {
+        assert!(!Args::default().anchor_focus);
+        let parsed =
+            parse_args_from(args(&["--socket", "/tmp/candle.sock", "--anchor-focus"])).unwrap();
+        assert!(parsed.anchor_focus);
+        assert!(!parsed.auto_endpoint);
+        let parsed = parse_args_from(args(&[
+            "--socket",
+            "/tmp/candle.sock",
+            "--anchor-focus",
+            "--auto-endpoint",
+        ]))
+        .unwrap();
+        assert!(parsed.anchor_focus && parsed.auto_endpoint);
+    }
 
     /// The regression: the snap sets no MYNA_DESKTOP_LOCALEDIR, so both
     /// catalogs must be found by real gettext through the default data dirs

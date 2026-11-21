@@ -47,7 +47,7 @@ impl Platform {
         let session = match self.profile {
             Profile::Gnome => return None,
             Profile::Xfce => "an Xfce session",
-            Profile::Generic => {
+            _ => {
                 "a session not recognised as GNOME (set MYNA_PLATFORM=gnome to force it)"
             }
         };

@@ -8,6 +8,9 @@ pub use myna_platform::text_input::{
     Activation, FocusEvent, InjectError, Injector, Support, Target, TextInputCapabilities,
 };
 
+pub mod anchor;
+pub mod egui;
+pub mod firefox;
 pub mod ibus;
 pub mod lazy;
 pub mod mock;

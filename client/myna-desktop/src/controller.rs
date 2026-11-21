@@ -740,7 +740,16 @@ impl DesktopController {
                 // Before the queue, so the arms above are already shut off by
                 // the time the drain below runs: an edge that arrives once the
                 // session is over belongs to the next utterance.
-                result = &mut run, if done.is_none() => done = Some(result),
+                result = &mut run, if done.is_none() => {
+                    // A capture-driven completion has no Release edge. Keep
+                    // manual-release parity unchanged, and resync only when
+                    // the successful session ended while its trigger was open.
+                    if trigger_open && matches!(&result, Ok(SessionOutcome::Completed { .. })) {
+                        trigger.resync().await;
+                        trigger_open = false;
+                    }
+                    done = Some(result);
+                },
                 // Queued events, before and after the session finishes: the
                 // drain is this same arm, so a focus loss is still seen first.
                 ev = events_rx.recv(), if events_open => match ev {
