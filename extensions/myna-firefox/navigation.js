@@ -101,7 +101,9 @@
         if(location.href!==startUrl)return finish({ok:false,code:"PAGE_CHANGED"});
         if(document.visibilityState==="hidden")return finish({ok:false,code:"TAB_HIDDEN"});
         const found=resolve(target);
-        if (!found.ok || !safeToActivate(found.el).ok) return;
+        if (!found.ok) return;
+        const allowed=safeToActivate(found.el);
+        if (!allowed.ok) return finish(allowed);
         const candidate=found.el,rect=candidate.getBoundingClientRect();
         clearTimeout(stability);
         stability=setTimeout(()=>{
@@ -113,7 +115,7 @@
         },120);
       }
       observer=new MutationObserver(check);
-      observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,
+      observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,characterData:true,
         attributeFilter:["hidden","disabled","aria-disabled","aria-hidden","class","style","href"]});
       timer=setTimeout(()=>finish({ok:false,code:"ELEMENT_TIMEOUT"}),ms);
       check();
