@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Myna — Navigation Firefox</title>
+<style>
+  body {font:14px system-ui,sans-serif;margin:14px;color:CanvasText;background:Canvas}
+  h1 {font-size:17px;margin:0 0 10px} form {display:grid;gap:8px}
+  textarea {width:100%;box-sizing:border-box;min-height:74px;font:inherit;resize:vertical;padding:8px}
+  button {font:inherit;cursor:pointer;padding:6px 10px}
+  .row {display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  #status {white-space:pre-wrap;overflow-wrap:anywhere;min-height:3em;padding:8px;
+    border:1px solid GrayText;border-radius:4px}
+  #site {font-size:12px;overflow-wrap:anywhere}
+  ol {padding-left:28px} li {margin:5px 0}
+  small {display:block;margin:10px 0;color:GrayText}
+</style>
+</head><body>
+<h1>Myna · Navigation DOM R1</h1>
+<p id="site">Onglet : non sélectionné</p>
+<div class="row"><button id="grant" type="button">Autoriser ce site</button><button id="list" type="button">Afficher les éléments</button></div>
+<form id="form"><label for="phrase">Commande (dictable avec Myna)</label>
+<textarea id="phrase" maxlength="220" spellcheck="false" placeholder="Ex. : attends que le bouton Continuer apparaisse"></textarea>
+<div class="row"><button type="submit">Exécuter</button><button id="cancel" type="button">Annuler l'attente</button></div>
+</form>
+<div id="status" role="status" aria-live="polite">Permission de site nécessaire.</div>
+<ol id="results"></ol>
+<small>Actions bornées au site autorisé. Pas de scripts arbitraires, aucune soumission de formulaire.</small>
+<script src="intent-router.js"></script><script src="sidebar.js"></script>
+</body></html>
