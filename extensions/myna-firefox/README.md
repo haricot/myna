@@ -15,7 +15,7 @@ strict, deterministic natural-language router. Current branch:
 3. Open Firefox Sidebars → **Myna Navigation**, or assign the Firefox command
    `_execute_sidebar_action` a shortcut in about:addons → Manage Extension Shortcuts.
    The toolbar button retains its original dictation-anchor meaning.
-4. Click **Autoriser ce site** (explicit Firefox host permission for the current site).
+4. Right-click inside the web page and choose **Myna Navigation — autoriser ce site**\n   (explicit Firefox host permission for this site). The sidebar also has a\n   permission button when the current tab URL is already available; it does\n   not ask for broad access to the list of all tabs.
    The sidebar will not request permissions on a voice-only event.
 5. Focus the sidebar command field, dictate with the existing Myna shortcut,
    then press Enter or click Exécuter. For example:
