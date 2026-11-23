@@ -12,7 +12,8 @@
   "permissions": [
     "activeTab",
     "scripting",
-    "nativeMessaging"
+    "nativeMessaging",
+    "menus"
   ],
   "optional_host_permissions": [
     "https://*/*",
