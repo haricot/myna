@@ -157,3 +157,23 @@ browser.tabs.onUpdated.addListener((tabId, info) => {
 });
 
 connect();
+
+
+// Separate user gesture for browser navigation. The existing toolbar action
+// remains exclusively for dictation anchoring. This menu only grants one
+// HTTP(S) site; it never reads page content or changes Myna's native protocol.
+if (browser.menus?.create) {
+  const NAV_GRANT_ID = "myna-nav-authorize-site";
+  browser.menus.create({
+    id: NAV_GRANT_ID, title: "Myna Navigation — autoriser ce site",
+    contexts: ["page"],
+  });
+  browser.menus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== NAV_GRANT_ID) return;
+    const origin = sitePattern(tab?.url);
+    if (!origin) return;
+    // Selecting this extension menu item is a Firefox user gesture and grants
+    // activeTab, including the tab URL, for this explicit permission request.
+    void browser.permissions.request({ origins: [origin] }).catch(() => {});
+  });
+}
