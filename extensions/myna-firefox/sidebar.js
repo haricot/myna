@@ -23,8 +23,8 @@ async function refresh() {
   $("site").textContent=tab?"Onglet : "+new URL(tab.url).origin:"Aucun onglet web autorisable.";
   const granted=activePattern && await browser.permissions.contains({origins:[activePattern]});
   $("grant").disabled=!activePattern || granted;
-  if(!activePattern)status("Seules les pages HTTP(S) ordinaires sont prises en charge.");
-  else if(!granted)status("Cliquez sur « Autoriser ce site » avant la première commande.");
+  if(!activePattern)status("Clic droit dans la page → Myna Navigation — autoriser ce site. Seules les pages HTTP(S) sont prises en charge.");
+  else if(!granted)status("Clic droit dans la page → Myna Navigation — autoriser ce site, puis réessayez.");
   return Boolean(granted);
 }
 $("grant").addEventListener("click",async()=>{
@@ -71,6 +71,7 @@ $("form").addEventListener("submit",event=>{
 });
 $("list").addEventListener("click",()=>void perform({type:"list"}));
 $("cancel").addEventListener("click",()=>void perform({type:"cancel"}));
+browser.permissions.onAdded.addListener(()=>void refresh());
 browser.tabs.onActivated.addListener(()=>void refresh());
 browser.tabs.onUpdated.addListener((_id,change)=>{if(change.url)void refresh();});
 void refresh();
